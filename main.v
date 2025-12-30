@@ -56,14 +56,12 @@ fn (mut app App) typ(t Type) {
 		}
 		ArrayType {
 			app.array_type(t)
-			// app.gen('[]${t.elt.name}')
 		}
 		ChanType {
 			app.chan_type(t)
 		}
 		MapType {
 			app.map_type(t)
-			// app.gen('[]${t.elt.name}')
 		}
 		StarExpr {
 			// Skip & if receiver is mut

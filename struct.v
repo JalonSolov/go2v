@@ -186,6 +186,9 @@ fn (mut app App) composite_lit(c CompositeLit) {
 		ArrayType {
 			app.array_init(c)
 		}
+		BasicLit {
+			app.expr(c)
+		}
 		CompositeLit {
 			app.composite_lit(c)
 		}

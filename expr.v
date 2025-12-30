@@ -63,32 +63,10 @@ fn (mut app App) expr(expr Expr) {
 }
 
 fn (mut app App) array_type(node ArrayType) {
-	match node.elt {
-		ArrayType {
-			app.gen('[]')
-			app.array_type(node.elt)
-		}
-		FuncType {
-			app.gen('[]')
-			app.func_type(node.elt)
-		}
-		Ident {
-			app.gen('[]${go2v_type(node.elt.name)}')
-		}
-		SelectorExpr {
-			app.gen('[]')
-			app.force_upper = true
-			app.selector_expr(node.elt)
-			app.force_upper = false
-		}
-		StarExpr {
-			app.gen('[]')
-			app.star_expr(node.elt)
-		}
-		else {
-			app.gen('UNKNOWN ELT ${node.elt.type_name()}')
-		}
-	}
+	app.gen('[')
+	app.expr(node.len)
+	app.gen(']')
+	app.expr(node.elt)
 }
 
 fn (mut app App) basic_lit(l BasicLit) {
@@ -165,7 +143,7 @@ fn (mut app App) map_type(node MapType) {
 	}
 	app.gen(']')
 	match node.val {
-		Ident, InterfaceType, SelectorExpr {
+		ArrayType, Ident, InterfaceType, SelectorExpr {
 			app.typ(node.val)
 		}
 	}
