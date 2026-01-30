@@ -57,6 +57,7 @@ type Specs = ImportSpec | TypeSpec | ValueSpec
 type Type = InvalidExpr
 	| ArrayType
 	| ChanType
+	| Ellipsis
 	| FuncType
 	| Ident
 	| InterfaceType

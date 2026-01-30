@@ -18,11 +18,12 @@ mut:
 	no_star             bool // To skip & in StarExpr in type matches  (interfaces)
 	type_decl_name      string
 	is_enum_decl        bool
-	is_mut_recv         bool            // so that `mut f Foo` is generated instead of `mut f &Foo`
-	cur_fn_names        map[string]bool // for fixing shadowing
-	running_test        bool            // disables shadowing for now
-	struct_or_alias     []string        // skip camel_to_snake for these, but force capitalize
-	named_return_params map[string]bool // for named return parameters like `func foo() (im int)`
+	is_mut_recv         bool              // so that `mut f Foo` is generated instead of `mut f &Foo`
+	cur_fn_names        map[string]bool   // for fixing shadowing
+	name_mapping        map[string]string // Go name to V name mapping for renamed variables
+	running_test        bool              // disables shadowing for now
+	struct_or_alias     []string          // skip camel_to_snake for these, but force capitalize
+	named_return_params map[string]bool   // for named return parameters like `func foo() (im int)`
 }
 
 fn (mut app App) genln(s string) {
@@ -68,6 +69,16 @@ fn (mut app App) typ(t Type) {
 		}
 		ChanType {
 			app.chan_type(t)
+		}
+		Ellipsis {
+			// Variadic parameter: ...T in Go => ...T in V
+			app.gen('...')
+			conversion := go2v_type_checked(t.elt.name)
+			if conversion.is_basic {
+				app.gen(conversion.v_type)
+			} else {
+				app.gen(app.go2v_ident(t.elt.name))
+			}
 		}
 		MapType {
 			app.map_type(t)

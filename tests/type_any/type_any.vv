@@ -1,0 +1,10 @@
+module main
+
+fn write_rune(a Any) {
+}
+
+fn write_tune(a ...Any) {
+}
+
+fn write_fune(a []Any) {
+}

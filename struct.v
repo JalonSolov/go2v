@@ -159,9 +159,37 @@ fn (mut app App) import_spec(spec ImportSpec) {
 }
 
 fn (mut app App) struct_decl(struct_name string, spec StructType) {
-	// Preserve the original struct name (don't convert to snake_case or capitalize)
-	app.genln('struct ${struct_name} {')
-	if spec.fields.list.len > 0 {
+	// Convert struct name - single capital letters need to be doubled (reserved for generics in V)
+	mut v_struct_name := struct_name
+	if struct_name.len == 1 && struct_name[0].is_capital() {
+		v_struct_name = struct_name + struct_name
+	}
+	app.genln('struct ${v_struct_name} {')
+
+	// First output embedded structs (fields without names)
+	for field in spec.fields.list {
+		if field.names.len == 0 {
+			// Embedded struct - skip if it's a pointer type (V doesn't support embedded pointers)
+			if field.typ is StarExpr {
+				continue
+			}
+			app.gen('\t')
+			app.force_upper = true
+			app.typ(field.typ)
+			app.force_upper = false
+			app.genln('')
+		}
+	}
+
+	// Then output named fields
+	mut has_named_fields := false
+	for field in spec.fields.list {
+		if field.names.len > 0 {
+			has_named_fields = true
+			break
+		}
+	}
+	if has_named_fields {
 		app.genln('pub mut:')
 	}
 	for field in spec.fields.list {

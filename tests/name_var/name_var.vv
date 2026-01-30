@@ -1,0 +1,10 @@
+module main
+
+fn main() {
+	mut a := isize(4)
+	mut a_1 := [isize(1), 2, 3]
+	println('${a} ${a[0]}')
+	if true {
+		mut a_2 := isize(6)
+	}
+}

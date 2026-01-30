@@ -10,5 +10,5 @@ pub fn sum(nums ...isize) isize {
 
 fn main() {
 	mut primes := [isize(2), 3, 5, 7]
-	println(sum(...primes))
+	println(sum(primes))
 }

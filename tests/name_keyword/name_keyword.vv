@@ -1,0 +1,20 @@
+module main
+
+fn fn_() {
+	match_()
+}
+
+fn match_() {
+	println('hey')
+}
+
+struct Foo {
+pub mut:
+	match_ bool
+}
+
+fn main() {
+	fn_()
+	mut match_ := Foo{}
+	match_.match_ = true
+}

@@ -114,10 +114,18 @@ fn (mut app App) call_expr(call CallExpr) {
 					if !more_than_one {
 						app.basic_lit(arg)
 					} else {
-						app.gen(arg.value[1..arg.value.len - 1])
+						// For strings, strip quotes; for other literals (int, float, bool), use as-is
+						if arg.kind == 'STRING' {
+							app.gen(arg.value[1..arg.value.len - 1])
+						} else {
+							app.gen(arg.value)
+						}
 					}
 				} else if arg is BinaryExpr {
 					app.expr(arg)
+				} else if arg is Ident && arg.name in ['true', 'false'] {
+					// Boolean literals should be embedded directly
+					app.gen(arg.name)
 				} else {
 					if more_than_one {
 						app.gen('\${')

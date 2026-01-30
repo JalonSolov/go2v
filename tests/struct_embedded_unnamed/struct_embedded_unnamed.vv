@@ -1,21 +1,18 @@
 module main
 
 struct AA {
-mut:
+pub mut:
 	aa isize
 }
 
 struct BB {
 	AA
-mut:
-	a  isize
+pub mut:
 	bb isize
 }
 
 fn main() {
 	mut b := BB{}
-	b.bb = 2
-	b.a = 3
-	b.AA.aa = 4
-	println(b.AA)
+	b.bb = isize(2)
+	b.AA.aa = isize(4)
 }

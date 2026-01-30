@@ -136,19 +136,13 @@ fn (mut app App) assign_stmt(assign AssignStmt, no_mut bool) {
 			app.gen(', ')
 		}
 		if lhs_expr is Ident {
-			// Handle shadowing
-			mut n := lhs_expr.name
+			// Handle shadowing - convert to V name first before checking
+			mut n := app.go2v_ident(lhs_expr.name)
 			if (assign.tok == ':=' || convert_to_decl) && n != '_' && n in app.cur_fn_names {
 				n = app.unique_name_anti_shadow(n)
 			}
 			app.cur_fn_names[n] = true
-
-			new_ident := Ident{
-				...lhs_expr
-				name: n
-			}
-			// app.ident(app.go2v_ident(new_ident))
-			app.ident(new_ident)
+			app.gen(n)
 		} else if lhs_expr is StarExpr {
 			// Can't use star_expr(), since it generates &
 			app.gen('*')

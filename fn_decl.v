@@ -3,7 +3,9 @@
 
 fn (mut app App) func_decl(decl FuncDecl) {
 	app.cur_fn_names.clear()
+	app.name_mapping.clear()
 	app.named_return_params.clear()
+	app.force_upper = false // Reset force_upper at function boundary
 	app.genln('')
 	app.comments(decl.doc)
 	method_name := app.go2v_ident(decl.name.name) // decl.name.name.to_lower()

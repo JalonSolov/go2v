@@ -1,0 +1,9 @@
+module main
+
+fn foo() {
+	mut empty := 0
+}
+
+fn bar() {
+	mut empty := 0
+}

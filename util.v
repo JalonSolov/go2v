@@ -84,6 +84,10 @@ fn (mut app App) go2v_ident(ident string) string {
 
 	// Preserve original casing for struct/type aliases
 	if ident in app.struct_or_alias {
+		// Single capital letter names need to be doubled (reserved for generics in V)
+		if id.len == 1 && id[0].is_capital() {
+			return id + id
+		}
 		return id
 	}
 
