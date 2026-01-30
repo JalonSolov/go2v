@@ -5,25 +5,28 @@ import os
 
 type Decls = FuncDecl | GenDecl
 
-type MapVal = ArrayType | Ident | InterfaceType | SelectorExpr
+type MapVal = ArrayType | Ident | InterfaceType | SelectorExpr | StarExpr
 
 type Expr = InvalidExpr
 	| ArrayType
 	| BasicLit
 	| BinaryExpr
 	| CallExpr
+	| ChanType
 	| CompositeLit
 	| Ellipsis
 	| FuncLit
 	| FuncType
 	| Ident
 	| IndexExpr
+	| InterfaceType
 	| KeyValueExpr
 	| MapType
 	| ParenExpr
 	| SelectorExpr
 	| SliceExpr
 	| StarExpr
+	| StructType
 	| TypeAssertExpr
 	| UnaryExpr
 
@@ -361,18 +364,21 @@ fn (e Expr) node_type() string {
 		BasicLit { return e.node_type }
 		BinaryExpr { return e.node_type }
 		CallExpr { return e.node_type }
+		ChanType { return e.node_type }
 		CompositeLit { return e.node_type }
 		Ellipsis { return e.node_type }
 		FuncLit { return e.node_type }
 		FuncType { return e.node_type }
 		Ident { return e.node_type }
 		IndexExpr { return e.node_type }
+		InterfaceType { return e.node_type }
 		KeyValueExpr { return e.node_type }
 		MapType { return e.node_type }
 		ParenExpr { return e.node_type }
 		SelectorExpr { return e.node_type }
 		StarExpr { return e.node_type }
 		SliceExpr { return e.node_type }
+		StructType { return e.node_type }
 		TypeAssertExpr { return e.node_type }
 		UnaryExpr { return e.node_type }
 	}

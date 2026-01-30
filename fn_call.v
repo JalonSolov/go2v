@@ -178,6 +178,7 @@ fn (mut app App) selector_xxx(sel SelectorExpr) {
 }
 
 fn (mut app App) make_call(call CallExpr) {
+	app.force_upper = true
 	app.expr(call.args[0])
 	if call.args[0] is ArrayType || call.args[0] is SelectorExpr {
 		// len only

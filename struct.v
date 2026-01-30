@@ -62,9 +62,10 @@ fn (mut app App) type_decl(spec TypeSpec) {
 
 fn (mut app App) global_decl(spec ValueSpec) {
 	for name in spec.names {
-		app.gen('__global ${name.name} ')
+		app.gen('__global ${name.name}')
 		match spec.typ.node_type {
 			'Ident' {
+				app.gen(' ')
 				app.genln(spec.typ.name)
 			}
 			'InvalidExpr' {
@@ -72,11 +73,14 @@ fn (mut app App) global_decl(spec ValueSpec) {
 				if spec.values.len > 0 {
 					app.expr(spec.values[0])
 				}
+				app.genln('')
 			}
 			else {
-				if spec.typ.node_type != '' && spec.values.len > 0 {
+				if spec.values.len > 0 {
+					app.gen(' = ')
 					app.expr(spec.values[0])
 				}
+				app.genln('')
 			}
 		}
 	}
@@ -164,6 +168,20 @@ fn (mut app App) struct_decl(struct_name string, spec StructType) {
 		}
 	}
 	app.genln('}\n')
+}
+
+fn (mut app App) struct_type(spec StructType) {
+	// Inline/anonymous struct type (e.g., struct { x int })
+	app.gen('struct {')
+	for field in spec.fields.list {
+		for n in field.names {
+			app.gen(' ')
+			app.gen(app.go2v_ident(n.name))
+			app.gen(' ')
+			app.typ(field.typ)
+		}
+	}
+	app.gen(' }')
 }
 
 fn (mut app App) interface_decl(interface_name string, spec InterfaceType) {

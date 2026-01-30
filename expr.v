@@ -19,6 +19,9 @@ fn (mut app App) expr(expr Expr) {
 		CallExpr {
 			app.call_expr(expr)
 		}
+		ChanType {
+			app.chan_type(expr)
+		}
 		CompositeLit {
 			app.composite_lit(expr)
 		}
@@ -34,6 +37,9 @@ fn (mut app App) expr(expr Expr) {
 		}
 		IndexExpr {
 			app.index_expr(expr)
+		}
+		InterfaceType {
+			app.interface_type(expr)
 		}
 		KeyValueExpr {
 			app.key_value_expr(expr)
@@ -53,6 +59,9 @@ fn (mut app App) expr(expr Expr) {
 		StarExpr {
 			app.star_expr(expr)
 		}
+		StructType {
+			app.struct_type(expr)
+		}
 		TypeAssertExpr {
 			app.type_assert_expr(expr)
 		}
@@ -63,9 +72,13 @@ fn (mut app App) expr(expr Expr) {
 }
 
 fn (mut app App) array_type(node ArrayType) {
+	force_upper := app.force_upper
 	app.gen('[')
-	app.expr(node.len)
+	if node.len !is InvalidExpr {
+		app.expr(node.len)
+	}
 	app.gen(']')
+	app.force_upper = force_upper
 	app.expr(node.elt)
 }
 
@@ -83,15 +96,10 @@ fn (mut app App) binary_expr(b BinaryExpr) {
 	if b.op == '+' && (b.x is BasicLit || b.y is BasicLit) {
 		x := b.x
 		y := b.y
-		if x is BasicLit && x.kind == 'STRING' && y is BasicLit && y.kind == 'STRING' {
-			app.gen("'${x.value[1..x.value.len - 1]}${y.value[1..y.value.len - 1]}'")
-		} else if x is BasicLit && x.kind == 'INT' && y is BasicLit && y.kind == 'INT' {
+		if x is BasicLit && x.kind == 'INT' && y is BasicLit && y.kind == 'INT' {
 			app.gen('${x.value}${b.op}${y.value}')
-		} else if x is BasicLit && y is Ident {
-			app.gen("'${x.value[1..x.value.len - 1]}\${${y.name}}'")
-		} else if x is Ident && y is BasicLit && y.kind == 'STRING' {
-			app.gen("'\${${x.name}}${y.value[1..y.value.len - 1]}'")
 		} else {
+			// Use regular concatenation to properly handle string escaping
 			app.expr(x)
 			app.gen('+')
 			app.expr(y)
@@ -143,7 +151,7 @@ fn (mut app App) map_type(node MapType) {
 	}
 	app.gen(']')
 	match node.val {
-		ArrayType, Ident, InterfaceType, SelectorExpr {
+		ArrayType, Ident, InterfaceType, SelectorExpr, StarExpr {
 			app.typ(node.val)
 		}
 	}
@@ -160,19 +168,28 @@ fn quoted_lit(s string, quote string) string {
 	go_quote := s[0]
 	mut no_quotes := s[1..s.len - 1]
 
-	// Use "" quotes if the string literal contains '
-	if quote2 == "'" && no_quotes.contains("'") && !no_quotes.contains('"') {
-		// no_quotes = no_quotes.replace(
-		quote2 = '"'
-	}
-
 	mut prefix := ''
 	if go_quote == `\`` {
 		prefix = 'r'
 	}
 
-	if prefix != 'r' && s.contains('\\"') {
-		quote2 = '"'
+	// Determine which V quote style to use
+	if prefix != 'r' {
+		has_single := no_quotes.contains("'")
+		has_escaped_double := no_quotes.contains('\\"')
+
+		if has_single && has_escaped_double {
+			// String has both ' and \" - use double quotes and keep escaping
+			quote2 = '"'
+		} else if has_single {
+			// String has ' but no \" - use double quotes
+			quote2 = '"'
+		} else if has_escaped_double {
+			// String has \" but no ' - use single quotes and unescape
+			quote2 = "'"
+			no_quotes = no_quotes.replace('\\"', '"')
+		}
+		// else: no special chars, use default single quotes
 	}
 
 	// Handle '`' => `\``

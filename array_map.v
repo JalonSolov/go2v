@@ -16,9 +16,17 @@ fn (mut app App) array_init(c CompositeLit) {
 				is_fixed = true
 			}
 			mut elt_name := ''
+			mut elt_is_selector := false
+			mut elt_is_ident := false
 			match typ.elt {
 				Ident {
 					elt_name = go2v_type(typ.elt.name)
+					elt_is_ident = true
+				}
+				SelectorExpr {
+					// e.g., []logger.MsgData
+					elt_name = ''
+					elt_is_selector = true
 				}
 				StarExpr {
 					x := typ.elt.x
@@ -46,7 +54,7 @@ fn (mut app App) array_init(c CompositeLit) {
 				app.gen(']${elt_name}{}')
 			} else {
 				match c.elts[0] {
-					BasicLit, CompositeLit {
+					BasicLit, CallExpr, CompositeLit, Ident, SelectorExpr, UnaryExpr {
 						for i, elt in c.elts {
 							if i > 0 {
 								app.gen(',')
@@ -58,6 +66,26 @@ fn (mut app App) array_init(c CompositeLit) {
 								app.gen('${elt_name}(')
 								app.expr(elt)
 								app.gen(')')
+							} else if elt is CompositeLit && (elt as CompositeLit).typ is InvalidExpr {
+								// Array with implicit element type
+								// []Type{{Field: value}} => [Type{field: value}]
+								// []pkg.Type{{Field: value}} => [pkg.Type{field: value}]
+								if elt_is_selector {
+									app.force_upper = true
+									app.selector_expr(typ.elt as SelectorExpr)
+								} else if elt_is_ident {
+									app.force_upper = true
+									app.gen(app.go2v_ident((typ.elt as Ident).name))
+								}
+								app.gen('{')
+								comp := elt as CompositeLit
+								for j, e in comp.elts {
+									if j > 0 {
+										app.gen(', ')
+									}
+									app.expr(e)
+								}
+								app.gen('}')
 							} else {
 								app.expr(elt)
 							}
