@@ -125,8 +125,24 @@ fn (mut app App) import_spec(spec ImportSpec) {
 	if name in nonexistent_modules {
 		return
 	}
-	if name == 'archive.zip' {
-		name = 'compress.zip'
+	// Skip modules with V keywords in their names
+	if name.contains('.sql') || name == 'database.sql' {
+		return
+	}
+	// Skip modules that don't have V equivalents
+	if name in ['bufio', 'mime.multipart', 'os.user'] {
+		return
+	}
+	// Go to V module mappings
+	match name {
+		'archive.zip' { name = 'compress.zip' }
+		'compress.flate' { name = 'compress.deflate' }
+		'container.list' { name = 'datatypes' }
+		'io.ioutil' { name = 'io.util' }
+		'mime' { name = 'net.http.mime' }
+		'unicode.utf8' { name = 'encoding.utf8' }
+		'net.http.cookiejar' { name = 'net.http' }
+		else {}
 	}
 	if name.starts_with(master_module_path) {
 		n := name.replace(master_module_path, '')
@@ -164,6 +180,20 @@ fn (mut app App) struct_decl(struct_name string, spec StructType) {
 	if struct_name.len == 1 && struct_name[0].is_capital() {
 		v_struct_name = struct_name + struct_name
 	}
+	// Check for name collision with existing global names
+	if v_struct_name in app.global_names {
+		mut i := 1
+		for {
+			new_name := '${v_struct_name}_${i}'
+			if new_name !in app.global_names {
+				v_struct_name = new_name
+				break
+			}
+			i++
+		}
+	}
+	// Track struct name globally
+	app.global_names[v_struct_name] = true
 	app.genln('struct ${v_struct_name} {')
 
 	// First output embedded structs (fields without names)

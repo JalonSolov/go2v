@@ -1,0 +1,11 @@
+module main
+
+struct aa {
+}
+
+fn main() {
+	mut aa := isize(42)
+}
+
+pub fn aa_1() {
+}

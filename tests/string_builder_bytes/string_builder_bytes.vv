@@ -1,0 +1,14 @@
+module main
+
+import bytes
+
+fn main() {
+	mut buf := &bytes.Buffer{}
+	mut test := 'mytest'
+	buf.write_string(test)
+	buf.cap()
+	buf.grow(10)
+	buf.len()
+	buf.str()
+	buf.reset()
+}

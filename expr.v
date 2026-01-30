@@ -157,6 +157,10 @@ fn (mut app App) map_type(node MapType) {
 		SelectorExpr {
 			app.typ(node.key)
 		}
+		StarExpr {
+			// Pointer type as map key, e.g., map[*Node]bool
+			app.star_expr(node.key)
+		}
 		else {}
 	}
 	app.gen(']')

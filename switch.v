@@ -74,23 +74,65 @@ fn (mut app App) switch_stmt(switch_stmt SwitchStmt) {
 }
 
 fn (mut app App) type_switch_stmt(node TypeSwitchStmt) {
-	app.assign_stmt(node.assign, false)
-	if node.assign.lhs.len == 0 {
-		app.genln('//lhs.len==0')
-		return
+	// Handle the assignment part first (e.g., `e := x.(type)` => `mut e := x`)
+	// Get the source expression from the RHS TypeAssertExpr
+	mut switch_expr := Expr(InvalidExpr{})
+	mut has_assignment := false
+
+	// node.assign can be either AssignStmt or ExprStmt
+	match node.assign {
+		AssignStmt {
+			if node.assign.rhs.len > 0 {
+				rhs0 := node.assign.rhs[0]
+				if rhs0 is TypeAssertExpr {
+					switch_expr = rhs0.x
+				}
+			}
+			has_assignment = node.assign.lhs.len > 0
+		}
+		ExprStmt {
+			// Type switch without assignment: switch s.(type)
+			if node.assign.x is TypeAssertExpr {
+				switch_expr = (node.assign.x as TypeAssertExpr).x
+			}
+			has_assignment = false
+		}
+		else {}
 	}
+
+	// Generate the assignment if there's an lhs
+	if has_assignment {
+		assign := node.assign as AssignStmt
+		lhs0 := assign.lhs[0]
+		if lhs0 is Ident {
+			mut lhs_name := app.go2v_ident(lhs0.name)
+			// Handle shadowing - rename if the name already exists
+			lhs_name = app.unique_name_anti_shadow(lhs_name)
+			app.cur_fn_names[lhs_name] = true // Track the variable for shadowing
+			app.gen('mut ')
+			app.gen(lhs_name)
+			app.gen(' := ')
+			app.expr(switch_expr)
+			app.genln('')
+		}
+	}
+
 	app.gen('match ')
-	lhs0 := node.assign.lhs[0]
-	if lhs0 is Ident {
-		app.ident(lhs0)
-	}
-	app.genln(' {')
+	// Use the switch expression with .type_name() instead of the assigned variable
+	app.expr(switch_expr)
+	app.genln('.type_name() {')
 	for stmt in node.body.list {
 		case_clause := stmt as CaseClause
 		for i, x in case_clause.list {
-			app.force_upper = true
-			app.no_star = true
-			app.expr(x)
+			// Type cases should be converted to string names
+			if x is Ident {
+				typ_name := go2v_type(x.name)
+				app.gen("'${typ_name}'")
+			} else {
+				app.force_upper = true
+				app.no_star = true
+				app.expr(x)
+			}
 			if i < case_clause.list.len - 1 {
 				app.gen(',')
 			}

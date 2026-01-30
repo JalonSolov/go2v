@@ -69,7 +69,7 @@ fn go2v_type_checked(typ string) TypeConversion {
 	return TypeConversion{typ, false}
 }
 
-const v_keywords = ['match', 'in', 'fn', 'as', 'enum']
+const v_keywords = ['match', 'in', 'fn', 'as', 'enum', 'typeof']
 
 fn (mut app App) go2v_ident(ident string) string {
 	mut id := ident
@@ -84,6 +84,7 @@ fn (mut app App) go2v_ident(ident string) string {
 
 	// Preserve original casing for struct/type aliases
 	if ident in app.struct_or_alias {
+		app.force_upper = false // Reset force_upper even for early return
 		// Single capital letter names need to be doubled (reserved for generics in V)
 		if id.len == 1 && id[0].is_capital() {
 			return id + id

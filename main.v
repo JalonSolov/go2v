@@ -24,6 +24,7 @@ mut:
 	running_test        bool              // disables shadowing for now
 	struct_or_alias     []string          // skip camel_to_snake for these, but force capitalize
 	named_return_params map[string]bool   // for named return parameters like `func foo() (im int)`
+	global_names        map[string]bool   // track all global names (functions, structs, etc.) to avoid collisions
 }
 
 fn (mut app App) genln(s string) {
@@ -89,7 +90,12 @@ fn (mut app App) typ(t Type) {
 				app.expr(t.x)
 				app.is_mut_recv = false
 			} else {
-				app.star_expr(t)
+				// V arrays are already references, so *[]T becomes just []T
+				if t.x is ArrayType {
+					app.array_type(t.x)
+				} else {
+					app.star_expr(t)
+				}
 			}
 		}
 		SelectorExpr {

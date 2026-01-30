@@ -7,13 +7,11 @@ fn (mut app App) array_init(c CompositeLit) {
 		ArrayType {
 			mut have_len := false
 			mut len_val := ''
-			mut is_fixed := false
+			// Any non-InvalidExpr length means fixed-size array
+			mut is_fixed := typ.len !is InvalidExpr
 			if typ.len is BasicLit {
-				is_fixed = typ.len.value != ''
 				have_len = typ.len.value != ''
 				len_val = typ.len.value
-			} else if typ.len is Ellipsis {
-				is_fixed = true
 			}
 			mut elt_name := ''
 			mut elt_is_selector := false
@@ -73,22 +71,68 @@ fn (mut app App) array_init(c CompositeLit) {
 								// Array with implicit element type
 								// []Type{{Field: value}} => [Type{field: value}]
 								// []pkg.Type{{Field: value}} => [pkg.Type{field: value}]
-								if elt_is_selector {
+								// [][]int{{1,2,3}} => [[isize(1),2,3]]
+								if typ.elt is ArrayType {
+									// Nested array - generate array literal with type cast on first element
+									comp := elt as CompositeLit
+									app.gen('[')
+									inner_elt := typ.elt as ArrayType
+									mut inner_type_name := ''
+									if inner_elt.elt is Ident {
+										inner_type_name = go2v_type((inner_elt.elt as Ident).name)
+									}
+									for j, e in comp.elts {
+										if j > 0 {
+											app.gen(', ')
+										}
+										// Only add type cast on first element of first inner array
+										if i == 0 && j == 0 && inner_type_name != ''
+											&& inner_type_name != 'string'
+											&& !inner_type_name.starts_with_capital() {
+											app.gen('${inner_type_name}(')
+											app.expr(e)
+											app.gen(')')
+										} else {
+											app.expr(e)
+										}
+									}
+									app.gen(']')
+								} else if elt_is_selector {
 									app.force_upper = true
 									app.selector_expr(typ.elt as SelectorExpr)
+									app.gen('{')
+									comp := elt as CompositeLit
+									for j, e in comp.elts {
+										if j > 0 {
+											app.gen(', ')
+										}
+										app.expr(e)
+									}
+									app.gen('}')
 								} else if elt_is_ident {
 									app.force_upper = true
 									app.gen(app.go2v_ident((typ.elt as Ident).name))
-								}
-								app.gen('{')
-								comp := elt as CompositeLit
-								for j, e in comp.elts {
-									if j > 0 {
-										app.gen(', ')
+									app.gen('{')
+									comp := elt as CompositeLit
+									for j, e in comp.elts {
+										if j > 0 {
+											app.gen(', ')
+										}
+										app.expr(e)
 									}
-									app.expr(e)
+									app.gen('}')
+								} else {
+									// Fallback: just output struct literal
+									app.gen('{')
+									comp := elt as CompositeLit
+									for j, e in comp.elts {
+										if j > 0 {
+											app.gen(', ')
+										}
+										app.expr(e)
+									}
+									app.gen('}')
 								}
-								app.gen('}')
 							} else if i == 0 && elt_name != '' && elt_name != 'string'
 								&& !elt_name.starts_with_capital() {
 								// specify type in the first element
@@ -116,17 +160,86 @@ fn (mut app App) array_init(c CompositeLit) {
 						app.gen(']')
 					}
 					KeyValueExpr {
-						if typ.len !is InvalidExpr {
+						// For sparse array initialization, compute max key + 1 for length (dynamic arrays only)
+						mut max_key := 0
+						for elt in c.elts {
+							kv := elt as KeyValueExpr
+							if kv.key is BasicLit {
+								key_lit := kv.key as BasicLit
+								mut key_val := 0
+								if key_lit.value.starts_with('0x') {
+									key_val = int(key_lit.value[2..].parse_int(16, 32) or { 0 })
+								} else {
+									key_val = key_lit.value.int()
+								}
+								if key_val > max_key {
+									max_key = key_val
+								}
+							}
+						}
+						// For Ellipsis [...], output computed size; otherwise output the length expression
+						if typ.len is Ellipsis {
+							app.gen('${max_key + 1}')
+						} else if typ.len !is InvalidExpr {
 							app.expr(typ.len)
 						}
-						app.gen(']${elt_name}{ init: match index {')
+						// For fixed arrays, don't include len: attribute; for dynamic arrays, include it
+						if is_fixed {
+							app.gen(']${elt_name}{init: match index {')
+						} else {
+							app.gen(']${elt_name}{len: ${max_key + 1}, init: match index {')
+						}
 						for elt in c.elts {
 							app.expr((elt as KeyValueExpr).key)
-							app.gen('{')
-							app.expr((elt as KeyValueExpr).value)
-							app.gen('}')
+							app.gen(' { ')
+							kv_value := (elt as KeyValueExpr).value
+							// Check if value is a CompositeLit with implicit type
+							if kv_value is CompositeLit
+								&& (kv_value as CompositeLit).typ is InvalidExpr {
+								// Add the element type name before the struct literal
+								if elt_is_ident {
+									app.force_upper = true
+									app.gen(app.go2v_ident((typ.elt as Ident).name))
+								} else if elt_is_selector {
+									app.force_upper = true
+									app.selector_expr(typ.elt as SelectorExpr)
+								}
+								app.gen('{')
+								comp := kv_value as CompositeLit
+								for j, e in comp.elts {
+									if j > 0 {
+										app.gen(', ')
+									}
+									// Handle KeyValueExpr explicitly to ensure lowercase field names
+									if e is KeyValueExpr {
+										kve := e as KeyValueExpr
+										if kve.key is Ident {
+											app.gen(app.go2v_ident((kve.key as Ident).name))
+											app.gen(': ')
+										} else {
+											app.expr(kve.key)
+											app.gen(': ')
+										}
+										app.expr(kve.value)
+									} else {
+										app.expr(e)
+									}
+								}
+								app.gen('}')
+							} else {
+								app.expr(kv_value)
+							}
+							app.gen(' }')
 						}
-						app.gen('else{0}}}')
+						// For else clause, use appropriate default based on element type
+						if elt_is_ident && elt_name.starts_with_capital() {
+							// Struct type - use empty struct literal
+							app.gen(' else { ${elt_name}{} }}}')
+						} else {
+							app.gen(' else { 0 }}}')
+						}
+						// Don't add '!' for sparse init - size is already specified via {init:}
+						is_fixed = false
 					}
 					else {
 						app.gen('>> unhandled array element type ${c.elts[0]}')

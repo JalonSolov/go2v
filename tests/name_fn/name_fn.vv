@@ -1,0 +1,11 @@
+module main
+
+fn main() {
+	mut a := isize(42)
+}
+
+pub fn a() {
+}
+
+fn a_1() {
+}

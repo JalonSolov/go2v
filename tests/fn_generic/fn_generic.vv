@@ -1,4 +1,4 @@
 module main
 
-fn abc(s voidptr) {
+fn abc[T](s T) {
 }

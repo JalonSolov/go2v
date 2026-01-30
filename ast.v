@@ -329,8 +329,8 @@ struct TypeSpec {
 }
 
 struct TypeSwitchStmt {
-	node_type string     @[json: '_type']
-	assign    AssignStmt @[json: 'Assign']
+	node_type string @[json: '_type']
+	assign    Stmt   @[json: 'Assign'] // Can be AssignStmt or ExprStmt
 	// tag       Expr       @[json: 'Tag']
 	body BlockStmt @[json: 'Body']
 }

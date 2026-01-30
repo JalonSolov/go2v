@@ -1,12 +1,12 @@
 module main
 
 struct Node {
-mut:
+pub mut:
 	abc bool
 }
 
 fn main() {
-	mut a := [2]Node{init: match it {
+	mut a := [2]Node{init: match index {
 		0 {
 			Node{
 				abc: true

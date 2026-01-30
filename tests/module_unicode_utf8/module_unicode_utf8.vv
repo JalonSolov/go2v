@@ -1,0 +1,24 @@
+module main
+
+import encoding.utf8
+
+fn main() {
+	mut b := 'Hello, 世界'.bytes()
+	mut x := u8(`a`)
+	mut a := 1 + utf8.encode_rune(b, x)
+	println(b)
+	println(a)
+	println(utf8.rune_len(`世`))
+	mut buf := 'a界'.bytes()
+	println(utf8.rune_start(buf[0]))
+	println(utf8.rune_start(buf[1]))
+	println(utf8.rune_start(buf[2]))
+	mut valid := 'Hello, 世界'.bytes()
+	mut invalid := [u8(0xff), 0xfe, 0xfd]
+	println(utf8.valid(valid))
+	println(utf8.valid(invalid))
+	println(utf8.rune_error)
+	println(utf8.rune_self)
+	println(utf8.max_rune)
+	println(utf8.utfm_ax)
+}

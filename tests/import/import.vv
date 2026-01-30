@@ -1,10 +1,11 @@
 module main
 
 import compress.zip
-import io
+import bytes
 import compress.deflate
 import compress.zlib
 import datatypes
+import io
 import io.util
 import net.http.mime
 import net.http
