@@ -149,8 +149,8 @@ fn (mut app App) import_spec(spec ImportSpec) {
 }
 
 fn (mut app App) struct_decl(struct_name string, spec StructType) {
-	app.force_upper = true
-	app.genln('struct ${app.go2v_ident(struct_name)} {')
+	// Preserve the original struct name (don't convert to snake_case or capitalize)
+	app.genln('struct ${struct_name} {')
 	if spec.fields.list.len > 0 {
 		app.genln('pub mut:')
 	}
@@ -240,6 +240,16 @@ fn (mut app App) composite_lit(c CompositeLit) {
 			}
 			app.gen('}')
 		}
+		StructType {
+			// Anonymous struct initialization, e.g., struct{}{}
+			app.struct_type(c.typ)
+			app.gen('{')
+			for elt in c.elts {
+				app.expr(elt)
+				app.genln('')
+			}
+			app.gen('}')
+		}
 		else {
 			app.genln('// UNHANDLED CompositeLit type  ${c.typ.type_name()} strtyp="${c.typ}"')
 		}
@@ -252,6 +262,7 @@ fn (mut app App) struct_init(c CompositeLit) {
 		Ident {
 			app.force_upper = true
 			n := app.go2v_ident(typ.name)
+			app.force_upper = false // Reset after type name
 			app.gen('${n}{')
 			if c.elts.len > 0 {
 				app.genln('')

@@ -90,11 +90,7 @@ fn (mut app App) decl_stmt(d DeclStmt) {
 								if idx > 0 {
 									app.gen(',')
 								}
-								n := app.go2v_ident(spec.names[idx].name)
-								if app.cur_fn_names[n] {
-									app.genln('// "${n}" already declared in cur fn. skipping. (why does this happen?)')
-									return
-								}
+								n := app.unique_name_anti_shadow(app.go2v_ident(spec.names[idx].name))
 								app.gen(n)
 								app.cur_fn_names[n] = true
 							}
@@ -182,6 +178,7 @@ fn (mut app App) defer_stmt(node DeferStmt) {
 
 fn (mut app App) expr_stmt(stmt ExprStmt) {
 	app.expr(stmt.x)
+	app.genln('')
 }
 
 fn (mut app App) for_stmt(f ForStmt) {
@@ -271,12 +268,14 @@ fn (mut app App) range_stmt(node RangeStmt) {
 		app.gen('_ ')
 	} else {
 		key_name := app.unique_name_anti_shadow(app.go2v_ident(node.key.name))
+		app.cur_fn_names[key_name] = true
 		app.gen(key_name)
 		app.gen(', ')
 		if node.value.name == '' {
 			app.gen(' _ ')
 		} else {
 			value_name := app.unique_name_anti_shadow(app.go2v_ident(node.value.name))
+			app.cur_fn_names[value_name] = true
 			app.gen(value_name)
 		}
 	}

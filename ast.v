@@ -5,7 +5,7 @@ import os
 
 type Decls = FuncDecl | GenDecl
 
-type MapVal = ArrayType | Ident | InterfaceType | SelectorExpr | StarExpr
+type MapVal = ArrayType | Ident | InterfaceType | SelectorExpr | StarExpr | StructType
 
 type Expr = InvalidExpr
 	| ArrayType

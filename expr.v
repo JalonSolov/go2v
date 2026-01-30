@@ -144,7 +144,17 @@ fn (mut app App) key_value_expr(expr KeyValueExpr) {
 fn (mut app App) map_type(node MapType) {
 	app.gen('map[')
 	match node.key {
-		Ident, SelectorExpr {
+		Ident {
+			// Map keys must be capitalized in V for struct types
+			conversion := go2v_type_checked(node.key.name)
+			if conversion.is_basic {
+				app.gen(conversion.v_type)
+			} else {
+				// Capitalize struct type names for map keys (V requirement)
+				app.gen(node.key.name.capitalize())
+			}
+		}
+		SelectorExpr {
 			app.typ(node.key)
 		}
 		else {}
@@ -153,6 +163,10 @@ fn (mut app App) map_type(node MapType) {
 	match node.val {
 		ArrayType, Ident, InterfaceType, SelectorExpr, StarExpr {
 			app.typ(node.val)
+		}
+		StructType {
+			// Empty struct type, e.g., map[K]struct{}
+			app.struct_type(node.val)
 		}
 	}
 }

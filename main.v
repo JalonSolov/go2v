@@ -52,7 +52,15 @@ fn (mut app App) typ(t Type) {
 	app.force_upper = true
 	match t {
 		Ident {
-			app.gen(go2v_type(t.name))
+			// Check if it's a basic type
+			conversion := go2v_type_checked(t.name)
+			if conversion.is_basic {
+				// It's a basic type, use the converted value directly
+				app.gen(conversion.v_type)
+			} else {
+				// It's a custom type, use go2v_ident for struct/alias handling
+				app.gen(app.go2v_ident(t.name))
+			}
 		}
 		ArrayType {
 			app.array_type(t)
@@ -76,7 +84,7 @@ fn (mut app App) typ(t Type) {
 			app.selector_expr(t)
 		}
 		StructType {
-			app.gen('STRUCT_TYPE')
+			app.struct_type(t)
 		}
 		InvalidExpr {
 			app.gen('INVALID_EXPR')
@@ -141,7 +149,7 @@ fn (mut app App) translate_file(go_file_path string) {
 fn (mut app App) run_test(subdir string, test_name string) ! {
 	app.running_test = true
 	go_file_path := '${subdir}/${test_name}/${test_name}.go.json'
-	expected_v_code_path := '${subdir}/${test_name}/${test_name}.vv'
+	is_complex_test := subdir.starts_with('complex_tests')
 
 	go_file := parse_go_ast(go_file_path) or {
 		eprintln('Failed to parse Go AST 2: ${err}')
@@ -152,11 +160,26 @@ fn (mut app App) run_test(subdir string, test_name string) ! {
 
 	v_path := '${tmpdir}/${test_name}.v'
 	os.write_file(v_path, generated_v_code) or { panic(err) }
-	res := os.execute('v fmt -w ${v_path}')
+	res := os.execute('v -translated-go fmt -w ${v_path}')
 	if res.exit_code != 0 {
 		println(res)
 		app.tests_ok = false
 	}
+
+	println('Running test ${test_name}...')
+
+	// For complex tests, just verify that translation and vfmt succeeded
+	if is_complex_test {
+		if res.exit_code == 0 {
+			println(term.green('OK (translation + vfmt)'))
+		} else {
+			println('Test ${test_name} failed: vfmt returned non-zero exit code')
+		}
+		return
+	}
+
+	// For simple tests, compare against .vv file
+	expected_v_code_path := '${subdir}/${test_name}/${test_name}.vv'
 
 	mut formatted_v_code := os.read_file(v_path) or { panic(err) }
 	formatted_v_code = formatted_v_code.replace('\n\n\tprint', '\n\tprint') // TODO
@@ -168,7 +191,6 @@ fn (mut app App) run_test(subdir string, test_name string) ! {
 		return
 	}
 
-	println('Running test ${test_name}...')
 	// if generated_v_code == expected_v_code {
 	// if trim_space(formatted_v_code) == trim_space(expected_v_code) {
 	if formatted_v_code == expected_v_code {

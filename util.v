@@ -1,59 +1,75 @@
 // Copyright (c) 2024 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by a GPL license that can be found in the LICENSE file.
 
+// go2v_type converts Go types to V types
+// Returns (converted_type, is_basic_type)
 fn go2v_type(typ string) string {
+	return go2v_type_checked(typ).v_type
+}
+
+struct TypeConversion {
+	v_type   string
+	is_basic bool
+}
+
+fn go2v_type_checked(typ string) TypeConversion {
 	match typ {
+		// Basic types that need conversion
 		'byte' {
-			return 'u8'
+			return TypeConversion{'u8', true}
 		}
 		'char' {
-			return 'u8'
+			return TypeConversion{'u8', true}
 		}
 		'float32' {
-			return 'f32'
+			return TypeConversion{'f32', true}
 		}
 		'float64' {
-			return 'f64'
+			return TypeConversion{'f64', true}
 		}
 		'int' {
-			return 'isize'
+			return TypeConversion{'isize', true}
 		}
 		'int8' {
-			return 'i8'
+			return TypeConversion{'i8', true}
 		}
 		'int16' {
-			return 'i16'
+			return TypeConversion{'i16', true}
 		}
 		'int32' {
-			return 'i32'
+			return TypeConversion{'i32', true}
 		}
 		'int64' {
-			return 'i64'
+			return TypeConversion{'i64', true}
 		}
 		'String' {
-			return 'string'
+			return TypeConversion{'string', true}
 		}
 		'uint' {
-			return 'usize'
+			return TypeConversion{'usize', true}
 		}
 		'uint8' {
-			return 'u8'
+			return TypeConversion{'u8', true}
 		}
 		'uint16' {
-			return 'u16'
+			return TypeConversion{'u16', true}
 		}
 		'uint32' {
-			return 'u32'
+			return TypeConversion{'u32', true}
 		}
 		'uint64' {
-			return 'u64'
+			return TypeConversion{'u64', true}
+		}
+		// Basic types that stay the same
+		'string', 'bool', 'voidptr', 'rune' {
+			return TypeConversion{typ, true}
 		}
 		else {}
 	}
-	return typ
+	return TypeConversion{typ, false}
 }
 
-const v_keywords = ['match']
+const v_keywords = ['match', 'in', 'fn', 'as', 'enum']
 
 fn (mut app App) go2v_ident(ident string) string {
 	mut id := ident
@@ -66,7 +82,12 @@ fn (mut app App) go2v_ident(ident string) string {
 		return 'unsafe { nil }'
 	}
 
-	if app.force_upper || ident in app.struct_or_alias {
+	// Preserve original casing for struct/type aliases
+	if ident in app.struct_or_alias {
+		return id
+	}
+
+	if app.force_upper {
 		app.force_upper = false
 		id_typ := go2v_type(id)
 		if id_typ != id {

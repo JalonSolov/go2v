@@ -5,9 +5,6 @@ fn (mut app App) unique_name_anti_shadow(n string) string {
 	if n == '_' {
 		return '_'
 	}
-	if app.running_test {
-		return n
-	}
 	if n !in app.cur_fn_names {
 		return n
 	}

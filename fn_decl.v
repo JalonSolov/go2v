@@ -91,7 +91,11 @@ fn (mut app App) func_params(params FieldList) {
 			app.typ(param.typ)
 		} else {
 			for j, name in param.names {
+				// Parameter names must be lowercase in V
+				saved_force_upper := app.force_upper
+				app.force_upper = false
 				app.gen(app.go2v_ident(name.name))
+				app.force_upper = saved_force_upper
 				app.gen(' ')
 				app.force_upper = true
 				app.typ(param.typ)

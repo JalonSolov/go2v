@@ -19,6 +19,10 @@ fn (mut app App) array_init(c CompositeLit) {
 			mut elt_is_selector := false
 			mut elt_is_ident := false
 			match typ.elt {
+				ArrayType {
+					// Nested array, e.g., [][]int
+					elt_name = ''
+				}
 				Ident {
 					elt_name = go2v_type(typ.elt.name)
 					elt_is_ident = true
@@ -33,6 +37,11 @@ fn (mut app App) array_init(c CompositeLit) {
 					match x {
 						Ident {
 							elt_name = go2v_type(x.name)
+						}
+						SelectorExpr {
+							// e.g., []*pkg.Type
+							elt_name = ''
+							elt_is_selector = true
 						}
 						else {
 							app.gen('>> unhandled array type "${x.node_type}"')
@@ -54,19 +63,13 @@ fn (mut app App) array_init(c CompositeLit) {
 				app.gen(']${elt_name}{}')
 			} else {
 				match c.elts[0] {
-					BasicLit, CallExpr, CompositeLit, Ident, SelectorExpr, UnaryExpr {
+					BasicLit, CallExpr, CompositeLit, Ident, IndexExpr, SelectorExpr, StarExpr,
+					UnaryExpr {
 						for i, elt in c.elts {
 							if i > 0 {
 								app.gen(',')
 							}
-							if i == 0 && elt_name != '' && elt_name != 'string'
-								&& !elt_name.starts_with_capital() {
-								// specify type in the first element
-								// [u8(1), 2, 3]
-								app.gen('${elt_name}(')
-								app.expr(elt)
-								app.gen(')')
-							} else if elt is CompositeLit && (elt as CompositeLit).typ is InvalidExpr {
+							if elt is CompositeLit && (elt as CompositeLit).typ is InvalidExpr {
 								// Array with implicit element type
 								// []Type{{Field: value}} => [Type{field: value}]
 								// []pkg.Type{{Field: value}} => [pkg.Type{field: value}]
@@ -86,6 +89,13 @@ fn (mut app App) array_init(c CompositeLit) {
 									app.expr(e)
 								}
 								app.gen('}')
+							} else if i == 0 && elt_name != '' && elt_name != 'string'
+								&& !elt_name.starts_with_capital() {
+								// specify type in the first element
+								// [u8(1), 2, 3]
+								app.gen('${elt_name}(')
+								app.expr(elt)
+								app.gen(')')
 							} else {
 								app.expr(elt)
 							}
@@ -134,9 +144,57 @@ fn (mut app App) array_init(c CompositeLit) {
 fn (mut app App) map_init(node CompositeLit) {
 	app.expr(node.typ)
 	app.genln('{')
+	map_typ := node.typ as MapType
 	for elt in node.elts {
 		kv := elt as KeyValueExpr
-		app.key_value_expr(kv)
+		// Handle key
+		if kv.key is Ident {
+			app.gen('\t${app.go2v_ident(kv.key.name)}: ')
+		} else {
+			app.expr(kv.key)
+			app.gen(': ')
+		}
+		// Handle value - check if it's an implicit initialization
+		if kv.value is CompositeLit && (kv.value as CompositeLit).typ is InvalidExpr {
+			comp := kv.value as CompositeLit
+			// Check if map value type is an array - generate array literal
+			if map_typ.val is ArrayType {
+				app.gen('[')
+				for i, e in comp.elts {
+					if i > 0 {
+						app.gen(', ')
+					}
+					app.expr(e)
+				}
+				app.gen(']')
+			} else {
+				// Implicit struct value - need to prefix with map's value type
+				app.force_upper = true
+				match map_typ.val {
+					Ident {
+						app.gen(app.go2v_ident(map_typ.val.name))
+					}
+					SelectorExpr {
+						app.selector_expr(map_typ.val)
+					}
+					StarExpr {
+						app.star_expr(map_typ.val)
+					}
+					else {}
+				}
+				app.gen('{')
+				if comp.elts.len > 0 {
+					app.genln('')
+				}
+				for e in comp.elts {
+					app.expr(e)
+					app.genln('')
+				}
+				app.gen('}')
+			}
+		} else {
+			app.expr(kv.value)
+		}
 		app.genln('')
 	}
 	app.gen('}')

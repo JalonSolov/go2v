@@ -24,3 +24,5 @@ z
 #Temp conversion files
 **/*.json
 out.txt
+complex_tests/**/*.v
+complex_tests/**/*.vv
