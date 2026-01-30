@@ -1,8 +1,12 @@
 module main
 
-const boms = [Go2VInlineStruct{[isize(0xfe), 0xff], 'utf-16be'},
+__global boms = [Go2VInlineStruct{[isize(0xfe), 0xff], 'utf-16be'},
 	Go2VInlineStruct{[isize(0xff), 0xfe], 'utf-16le'},
 	Go2VInlineStruct{[isize(0xef), 0xbb, 0xbf], 'utf-8'}]
+
+fn main() {
+	mut a := [Go2VInlineStruct_1{0}]
+}
 
 struct Go2VInlineStruct {
 mut:
@@ -13,8 +17,4 @@ mut:
 struct Go2VInlineStruct_1 {
 mut:
 	num isize
-}
-
-fn main() {
-	mut a := [Go2VInlineStruct_1{0}]
 }

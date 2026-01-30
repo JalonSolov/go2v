@@ -49,13 +49,18 @@ fn (mut app App) gen_decl(decl GenDecl) {
 fn (mut app App) type_decl(spec TypeSpec) {
 	// Remember the type name for the upcoming const (enum) handler if it's an enum
 	name := spec.name.name
-	app.type_decl_name = name
-	// TODO figure out how to differentiate between enums and type aliases
-	if name == 'EnumTest' {
+	// V requires type aliases to start with a capital letter
+	v_name := name.capitalize()
+	// Store alias info
+	app.struct_or_alias << name
+	app.struct_or_alias << v_name
+	// If this type will become an enum (detected by pre-scan), skip the type alias
+	if name in app.enum_types {
+		app.type_decl_name = name
 		return
 	}
 	// Generate actual type alias
-	app.gen('type ${name} = ')
+	app.gen('type ${v_name} = ')
 	app.typ(spec.typ)
 	app.genln('')
 }
@@ -87,14 +92,20 @@ fn (mut app App) global_decl(spec ValueSpec) {
 }
 
 fn (mut app App) const_decl(spec ValueSpec) {
-	// Handle iota (V enuma)
-	if spec.values.len > 0 {
+	// Handle iota (V enum) - check if this const block uses iota
+	// Only start a new enum if we're not already in one
+	if !app.is_enum_decl && spec.values.len > 0 {
 		first_val := spec.values[0]
-		if first_val is Ident {
-			if first_val.name == 'iota' {
-				app.is_enum_decl = true
-				app.genln('enum ${app.type_decl_name} {')
+		if app.contains_iota(first_val) {
+			app.is_enum_decl = true
+			// Use the type from the spec if available (for cases like `const X SomeType = iota`)
+			// Otherwise fall back to type_decl_name
+			enum_name := if spec.typ.node_type == 'Ident' && spec.typ.name != '' {
+				spec.typ.name
+			} else {
+				app.type_decl_name
 			}
+			app.genln('enum ${enum_name} {')
 		}
 	}
 	for i, name in spec.names {
@@ -103,17 +114,31 @@ fn (mut app App) const_decl(spec ValueSpec) {
 		}
 		n := app.go2v_ident(name.name)
 		if app.is_enum_decl {
-			if n != 'iota' {
-				app.genln(n)
-				continue
+			// Handle enum values - check if there's an explicit value
+			if i < spec.values.len {
+				val := spec.values[i]
+				if val is BasicLit {
+					// Explicit value like `= 5`
+					app.gen(n)
+					app.gen(' = ')
+					app.basic_lit(val)
+					app.genln('')
+					continue
+				} else if val is Ident && val.name == 'iota' {
+					// Just iota, output the name
+					app.genln(n)
+					continue
+				}
 			}
+			// No explicit value, just output the name
+			app.genln(n)
 		} else {
 			app.gen('const ${n} = ')
+			if i < spec.values.len {
+				app.expr(spec.values[i])
+			}
+			app.genln('')
 		}
-		if i < spec.values.len && !app.is_enum_decl {
-			app.expr(spec.values[i])
-		}
-		app.genln('')
 	}
 }
 
@@ -343,4 +368,74 @@ fn (mut app App) struct_init(c CompositeLit) {
 		}
 		else {}
 	}
+}
+
+// Helper function to check if an expression contains iota
+fn (app App) contains_iota(expr Expr) bool {
+	match expr {
+		Ident {
+			return expr.name == 'iota'
+		}
+		BinaryExpr {
+			return app.contains_iota(expr.x) || app.contains_iota(expr.y)
+		}
+		ParenExpr {
+			return app.contains_iota(expr.x)
+		}
+		CallExpr {
+			// Check if any arg contains iota
+			for arg in expr.args {
+				if app.contains_iota(arg) {
+					return true
+				}
+			}
+			return false
+		}
+		else {
+			return false
+		}
+	}
+}
+
+// Generate a synthetic struct for inline/anonymous struct types
+// Returns the generated struct name
+fn (mut app App) generate_inline_struct(expr Expr) string {
+	st := expr as StructType
+
+	// Generate unique struct name
+	mut struct_name := 'Go2VInlineStruct'
+	if app.inline_struct_count > 0 {
+		struct_name = 'Go2VInlineStruct_${app.inline_struct_count}'
+	}
+	app.inline_struct_count++
+
+	// Build struct definition
+	mut result := '\nstruct ${struct_name} {\nmut:\n'
+
+	for field in st.fields.list {
+		for n in field.names {
+			result += '\t${app.go2v_ident(n.name)} '
+			// Get type string
+			match field.typ {
+				Ident {
+					result += go2v_type(field.typ.name)
+				}
+				ArrayType {
+					result += '[]'
+					if field.typ.elt is Ident {
+						elt := field.typ.elt as Ident
+						result += go2v_type(elt.name)
+					}
+				}
+				else {
+					result += 'voidptr'
+				}
+			}
+			result += '\n'
+		}
+	}
+	result += '}\n'
+
+	app.pending_structs << result
+	return struct_name
 }

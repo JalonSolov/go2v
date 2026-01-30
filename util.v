@@ -69,14 +69,12 @@ fn go2v_type_checked(typ string) TypeConversion {
 	return TypeConversion{typ, false}
 }
 
+// V keywords that need escaping - split into regular keywords and literals
 const v_keywords = ['match', 'in', 'fn', 'as', 'enum', 'typeof']
+const v_literals = ['true', 'false', 'none'] // These are only escaped when converted from different case
 
 fn (mut app App) go2v_ident(ident string) string {
 	mut id := ident
-
-	if ident in v_keywords {
-		id = id + '_'
-	}
 
 	if id == 'nil' {
 		return 'unsafe { nil }'
@@ -84,10 +82,15 @@ fn (mut app App) go2v_ident(ident string) string {
 
 	// Preserve original casing for struct/type aliases
 	if ident in app.struct_or_alias {
+		was_force_upper := app.force_upper
 		app.force_upper = false // Reset force_upper even for early return
 		// Single capital letter names need to be doubled (reserved for generics in V)
 		if id.len == 1 && id[0].is_capital() {
 			return id + id
+		}
+		// Type aliases in V must start with capital letter
+		if was_force_upper && !id[0].is_capital() {
+			return id.capitalize()
 		}
 		return id
 	}
@@ -98,7 +101,21 @@ fn (mut app App) go2v_ident(ident string) string {
 		if id_typ != id {
 			return id_typ
 		}
-		return id.capitalize()
+		id = id.capitalize()
+	} else {
+		id = id.camel_to_snake()
 	}
-	return id.camel_to_snake()
+
+	// Always escape V keywords (match, in, fn, as, etc.)
+	if id in v_keywords {
+		id = id + '_'
+	}
+
+	// Only escape V literals (true, false, none) if they came from a different case
+	// This allows Go boolean literals to pass through unchanged
+	if id in v_literals && id != ident {
+		id = id + '_'
+	}
+
+	return id
 }

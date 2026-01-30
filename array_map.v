@@ -46,6 +46,12 @@ fn (mut app App) array_init(c CompositeLit) {
 						}
 					}
 				}
+				StructType {
+					// Inline/anonymous struct as array element
+					struct_name := app.generate_inline_struct(typ.elt)
+					elt_name = struct_name
+					elt_is_ident = true
+				}
 				else {
 					app.gen('>> unhandled array element type "${typ.elt}"')
 					return
@@ -111,7 +117,7 @@ fn (mut app App) array_init(c CompositeLit) {
 									app.gen('}')
 								} else if elt_is_ident {
 									app.force_upper = true
-									app.gen(app.go2v_ident((typ.elt as Ident).name))
+									app.gen(elt_name)
 									app.gen('{')
 									comp := elt as CompositeLit
 									for j, e in comp.elts {

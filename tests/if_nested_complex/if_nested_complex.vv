@@ -1,0 +1,21 @@
+module main
+
+fn main() {
+	mut z := isize(123)
+	if 1000 <= z && true || false {
+		mut ho := -1
+	} else {
+		mut z_1 := isize(324)
+		if z_1 == 324 {
+			if false {
+				mut ok := isize(0)
+			} else {
+				if true {
+					if true {
+						println(z_1)
+					}
+				}
+			}
+		}
+	}
+}

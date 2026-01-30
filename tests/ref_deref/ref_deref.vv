@@ -1,0 +1,11 @@
+module main
+
+type InsertionModeStack = []isize
+
+fn (s InsertionModeStack) foo() isize {
+	mut i := s.len
+	mut im := s[i - 1]
+	mut a := &i
+	println(*a)
+	return im
+}

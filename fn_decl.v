@@ -66,13 +66,19 @@ fn (mut app App) func_decl(decl FuncDecl) {
 	if decl.recv.list.len > 0 {
 		// app.gen('fn ${recv} ')
 		app.gen('fn (')
+		recv_typ := decl.recv.list[0].typ
+		is_ptr_recv := recv_typ is StarExpr
 		if decl.recv.list[0].names.len == 0 {
 			app.is_mut_recv = true
 			app.gen('mut _ ')
 		} else {
 			recv_name := decl.recv.list[0].names[0].name
 			app.cur_fn_names[recv_name] = true // Register the receiver in this scope, since some people shadow receivers too!
-
+			// Pointer receivers should be mut in V
+			if is_ptr_recv {
+				app.gen('mut ')
+				app.is_mut_recv = true
+			}
 			app.gen(recv_name + ' ')
 		}
 		app.typ(decl.recv.list[0].typ)

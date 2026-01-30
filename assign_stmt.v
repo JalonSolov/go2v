@@ -118,6 +118,10 @@ fn (mut app App) assign_stmt(assign AssignStmt, no_mut bool) {
 		}
 	}
 
+	// Collect pending name mappings - don't apply until after RHS processing
+	// This ensures that `x := x + 1` uses the outer x on RHS, not the new x
+	mut pending_mappings := map[string]string{}
+
 	for l_idx, lhs_expr in assign.lhs {
 		if l_idx == 0 {
 			match lhs_expr {
@@ -137,9 +141,12 @@ fn (mut app App) assign_stmt(assign AssignStmt, no_mut bool) {
 		}
 		if lhs_expr is Ident {
 			// Handle shadowing - convert to V name first before checking
-			mut n := app.go2v_ident(lhs_expr.name)
+			go_name := lhs_expr.name // Original Go name
+			mut n := app.go2v_ident(go_name)
 			if (assign.tok == ':=' || convert_to_decl) && n != '_' && n in app.cur_fn_names {
 				n = app.unique_name_anti_shadow(n)
+				// Queue the mapping for later - don't apply yet
+				pending_mappings[go_name] = n
 			}
 			app.cur_fn_names[n] = true
 			app.gen(n)
@@ -186,6 +193,12 @@ fn (mut app App) assign_stmt(assign AssignStmt, no_mut bool) {
 			app.gen(')')
 		}
 	}
+
+	// Now apply the pending name mappings after RHS has been processed
+	for go_name, v_name in pending_mappings {
+		app.name_mapping[go_name] = v_name
+	}
+
 	app.genln('')
 }
 

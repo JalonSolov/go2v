@@ -57,7 +57,13 @@ fn (mut app App) expr(expr Expr) {
 			app.slice_expr(expr)
 		}
 		StarExpr {
-			app.star_expr(expr)
+			// In type context (force_upper is true), * means pointer type (&)
+			// In expression context, * is dereference operator
+			if app.force_upper {
+				app.star_expr(expr)
+			} else {
+				app.star_expr_deref(expr)
+			}
 		}
 		StructType {
 			app.struct_type(expr)
@@ -121,6 +127,11 @@ fn (mut app App) chan_type(node ChanType) {
 }
 
 fn (mut app App) ident(node Ident) {
+	// Check if this variable was renamed due to shadowing (using Go name as key)
+	if node.name in app.name_mapping {
+		app.gen(go2v_type(app.name_mapping[node.name]))
+		return
+	}
 	app.gen(go2v_type(app.go2v_ident(node.name)))
 }
 
@@ -248,6 +259,12 @@ fn (mut app App) star_expr(node StarExpr) {
 	} else {
 		app.gen('&')
 	}
+	app.expr(node.x)
+}
+
+// star_expr_deref handles *x in expression context (dereferencing)
+fn (mut app App) star_expr_deref(node StarExpr) {
+	app.gen('*')
 	app.expr(node.x)
 }
 

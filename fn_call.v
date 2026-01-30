@@ -7,6 +7,26 @@ fn (mut app App) call_expr(call CallExpr) {
 
 	// fmt.Println => println
 	fun := call.fun
+
+	// Handle type cast: (int)(x) => isize(x)
+	if fun is ParenExpr {
+		inner := fun.x
+		if inner is Ident {
+			type_name := inner.name
+			v_type := go2v_type(type_name)
+			if v_type != type_name {
+				// It's a type conversion like (int)(x)
+				app.gen(v_type)
+				app.gen('(')
+				if call.args.len > 0 {
+					app.expr(call.args[0])
+				}
+				app.gen(')')
+				return
+			}
+		}
+	}
+
 	if fun is SelectorExpr {
 		if fun.sel.name == 'String' && fun.x is CallExpr {
 			app.expr(fun.x)

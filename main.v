@@ -25,6 +25,9 @@ mut:
 	struct_or_alias     []string          // skip camel_to_snake for these, but force capitalize
 	named_return_params map[string]bool   // for named return parameters like `func foo() (im int)`
 	global_names        map[string]bool   // track all global names (functions, structs, etc.) to avoid collisions
+	inline_struct_count int               // counter for generating unique inline struct names
+	pending_structs     []string          // inline struct definitions to output
+	enum_types          map[string]bool   // types that will become enums (detected by pre-scan)
 }
 
 fn (mut app App) genln(s string) {
@@ -36,6 +39,9 @@ fn (mut app App) gen(s string) {
 }
 
 fn (mut app App) generate_v_code(go_file GoFile) string {
+	// Pre-scan to identify enum types (types used with iota in const blocks)
+	app.scan_for_enum_types(go_file.decls)
+
 	app.genln('module ${app.go2v_ident(go_file.package_name.name)}\n')
 
 	for decl in go_file.decls {
@@ -48,7 +54,38 @@ fn (mut app App) generate_v_code(go_file GoFile) string {
 			}
 		}
 	}
+
+	// Output any pending inline struct definitions
+	for struct_def in app.pending_structs {
+		app.gen(struct_def)
+	}
+
 	return app.sb.str()
+}
+
+// scan_for_enum_types pre-scans declarations to identify types that will become enums
+// This allows type_decl to skip generating type aliases for these types
+fn (mut app App) scan_for_enum_types(decls []Decls) {
+	for decl in decls {
+		if decl is GenDecl {
+			if decl.tok == 'const' {
+				for spec in decl.specs {
+					if spec is ValueSpec {
+						// Check if this const uses iota
+						for val in spec.values {
+							if app.contains_iota(val) {
+								// This is an enum - record the type name
+								if spec.typ.node_type == 'Ident' && spec.typ.name != '' {
+									app.enum_types[spec.typ.name] = true
+								}
+								break
+							}
+						}
+					}
+				}
+			}
+		}
+	}
 }
 
 fn (mut app App) typ(t Type) {

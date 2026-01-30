@@ -78,6 +78,7 @@ fn (mut app App) type_switch_stmt(node TypeSwitchStmt) {
 	// Get the source expression from the RHS TypeAssertExpr
 	mut switch_expr := Expr(InvalidExpr{})
 	mut has_assignment := false
+	mut assigned_var_name := ''
 
 	// node.assign can be either AssignStmt or ExprStmt
 	match node.assign {
@@ -109,6 +110,7 @@ fn (mut app App) type_switch_stmt(node TypeSwitchStmt) {
 			// Handle shadowing - rename if the name already exists
 			lhs_name = app.unique_name_anti_shadow(lhs_name)
 			app.cur_fn_names[lhs_name] = true // Track the variable for shadowing
+			assigned_var_name = lhs_name
 			app.gen('mut ')
 			app.gen(lhs_name)
 			app.gen(' := ')
@@ -118,21 +120,19 @@ fn (mut app App) type_switch_stmt(node TypeSwitchStmt) {
 	}
 
 	app.gen('match ')
-	// Use the switch expression with .type_name() instead of the assigned variable
-	app.expr(switch_expr)
+	// Use the assigned variable name only for complex expressions (to avoid struct literal issues in match)
+	// For simple Ident expressions, use the original to maintain expected behavior
+	if assigned_var_name != '' && switch_expr !is Ident {
+		app.gen(assigned_var_name)
+	} else {
+		app.expr(switch_expr)
+	}
 	app.genln('.type_name() {')
 	for stmt in node.body.list {
 		case_clause := stmt as CaseClause
 		for i, x in case_clause.list {
 			// Type cases should be converted to string names
-			if x is Ident {
-				typ_name := go2v_type(x.name)
-				app.gen("'${typ_name}'")
-			} else {
-				app.force_upper = true
-				app.no_star = true
-				app.expr(x)
-			}
+			app.gen(app.type_case_pattern(x))
 			if i < case_clause.list.len - 1 {
 				app.gen(',')
 			}
@@ -147,7 +147,23 @@ fn (mut app App) type_switch_stmt(node TypeSwitchStmt) {
 	app.genln('}')
 }
 
-/*
-fn (mut app App) switch_stmt_body(body BlockStmt) {
+// Helper to extract the type name from a case pattern in type switch
+fn (app App) type_case_pattern(x Expr) string {
+	match x {
+		Ident {
+			// Simple type like `string` or `int`
+			return "'${go2v_type(x.name)}'"
+		}
+		StarExpr {
+			// Pointer type like `*Foo`
+			return app.type_case_pattern(x.x)
+		}
+		SelectorExpr {
+			// Qualified type like `pkg.Type`
+			return "'${x.sel.name}'"
+		}
+		else {
+			return "'UNKNOWN_TYPE'"
+		}
+	}
 }
-*/

@@ -1,0 +1,7 @@
+module main
+
+fn main() {
+	mut test := 'mytest'
+	mut result := test.to_lower()
+	println(result)
+}

@@ -23,7 +23,7 @@ pub mut:
 	def [][2]string
 }
 
-type insertionMode = fn () bool
+type InsertionMode = fn () bool
 
 fn bis() {
 	mut s := []string{}

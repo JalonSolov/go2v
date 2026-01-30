@@ -210,6 +210,15 @@ fn (mut app App) for_stmt(f ForStmt) {
 		return
 	}
 	// for init; cond; post {
+	// Track which variables are declared in the init (they're scoped to the loop)
+	mut loop_vars := []string{}
+	if f.init.lhs.len > 0 && f.init.tok == ':=' {
+		for lhs in f.init.lhs {
+			if lhs is Ident {
+				loop_vars << app.go2v_ident(lhs.name)
+			}
+		}
+	}
 	app.assign_stmt(f.init, true)
 	app.gen('; ')
 	app.expr(f.cond)
@@ -218,6 +227,10 @@ fn (mut app App) for_stmt(f ForStmt) {
 		app.stmt(f.post)
 	}
 	app.block_stmt(f.body)
+	// Remove for loop variables from cur_fn_names since they're scoped to the loop
+	for v in loop_vars {
+		app.cur_fn_names.delete(v)
+	}
 }
 
 fn (mut app App) go_stmt(stmt GoStmt) {
