@@ -3,6 +3,7 @@
 
 fn (mut app App) func_decl(decl FuncDecl) {
 	app.cur_fn_names.clear()
+	app.named_return_params.clear()
 	app.genln('')
 	app.comments(decl.doc)
 	method_name := app.go2v_ident(decl.name.name) // decl.name.name.to_lower()
@@ -12,6 +13,14 @@ fn (mut app App) func_decl(decl FuncDecl) {
 		app.gen('pub ')
 	}
 	// println('FUNC DECL ${method_name}')
+	// Track named return parameters
+	for ret in decl.typ.results.list {
+		for n in ret.names {
+			if n.name != '' {
+				app.named_return_params[n.name] = true
+			}
+		}
+	}
 
 	// mut recv := ''
 	// if decl.recv.list.len > 0 {

@@ -2,6 +2,6 @@ module main
 
 fn foo() {
 	for i, c in '' {
-		mut c_1 := 2
+		mut c_1 := isize(2)
 	}
 }

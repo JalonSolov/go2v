@@ -137,6 +137,16 @@ fn (mut app App) import_spec(spec ImportSpec) {
 		app.genln(' // local module')
 		return
 	}
+	// Handle golang.org/x/ imports by stripping the prefix
+	if name.starts_with('golang.org.x.') {
+		n := name.replace('golang.org.x.', '')
+		app.gen('import ${n}')
+		if spec.name.name != '' {
+			app.gen(' as ${spec.name.name}')
+		}
+		app.genln('')
+		return
+	}
 	// TODO a temp hack
 	if name.starts_with('github') {
 		return

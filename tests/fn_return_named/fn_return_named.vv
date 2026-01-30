@@ -1,6 +1,6 @@
 module main
 
 fn foo() isize {
-	im := isize(123)
+	mut im := isize(123)
 	return im
 }

@@ -26,14 +26,105 @@ fn (mut app App) unique_name_anti_shadow(n string) string {
 	return res
 }
 
+// Check if an expression contains a reference to a specific identifier
+fn (app App) expr_contains_ident(e Expr, name string) bool {
+	match e {
+		Ident {
+			return e.name == name
+		}
+		CallExpr {
+			// Check function name and all arguments
+			if app.expr_contains_ident(e.fun, name) {
+				return true
+			}
+			for arg in e.args {
+				if app.expr_contains_ident(arg, name) {
+					return true
+				}
+			}
+		}
+		BinaryExpr {
+			return app.expr_contains_ident(e.x, name) || app.expr_contains_ident(e.y, name)
+		}
+		UnaryExpr {
+			return app.expr_contains_ident(e.x, name)
+		}
+		SelectorExpr {
+			return app.expr_contains_ident(e.x, name)
+		}
+		IndexExpr {
+			return app.expr_contains_ident(e.x, name) || app.expr_contains_ident(e.index, name)
+		}
+		SliceExpr {
+			if app.expr_contains_ident(e.x, name) {
+				return true
+			}
+			if e.low !is InvalidExpr && app.expr_contains_ident(e.low, name) {
+				return true
+			}
+			if e.high !is InvalidExpr && app.expr_contains_ident(e.high, name) {
+				return true
+			}
+		}
+		StarExpr {
+			return app.expr_contains_ident(e.x, name)
+		}
+		ParenExpr {
+			return app.expr_contains_ident(e.x, name)
+		}
+		CompositeLit {
+			for elt in e.elts {
+				if app.expr_contains_ident(elt, name) {
+					return true
+				}
+			}
+		}
+		KeyValueExpr {
+			return app.expr_contains_ident(e.key, name) || app.expr_contains_ident(e.value, name)
+		}
+		else {}
+	}
+	return false
+}
+
 fn (mut app App) assign_stmt(assign AssignStmt, no_mut bool) {
+	// Special case for 'append()' => '<<' - check this first before generating LHS
+	// because we don't want to add 'mut' for append operations
+	if app.check_and_handle_append_early(assign) {
+		return
+	}
+
+	// Check if this is an assignment to a named return param that needs to be converted to declaration
+	// But only if the LHS variable is NOT used on the RHS (to avoid circular reference)
+	mut convert_to_decl := false
+	if assign.tok == '=' && assign.lhs.len == 1 {
+		if assign.lhs[0] is Ident {
+			lhs_ident := assign.lhs[0] as Ident
+			lhs_name := lhs_ident.name
+			if lhs_name in app.named_return_params && lhs_name !in app.cur_fn_names {
+				// Check if lhs_name is used in RHS - if so, don't convert to declaration
+				// because the variable needs to be pre-declared for the RHS to reference it
+				mut used_in_rhs := false
+				for rhs in assign.rhs {
+					if app.expr_contains_ident(rhs, lhs_name) {
+						used_in_rhs = true
+						break
+					}
+				}
+				if !used_in_rhs {
+					convert_to_decl = true
+				}
+			}
+		}
+	}
+
 	for l_idx, lhs_expr in assign.lhs {
 		if l_idx == 0 {
 			match lhs_expr {
 				Ident {
 					if lhs_expr.name != '_' {
 						if !no_mut {
-							if assign.tok == ':=' {
+							if assign.tok == ':=' || convert_to_decl {
 								app.gen('mut ')
 							}
 						}
@@ -47,7 +138,7 @@ fn (mut app App) assign_stmt(assign AssignStmt, no_mut bool) {
 		if lhs_expr is Ident {
 			// Handle shadowing
 			mut n := lhs_expr.name
-			if assign.tok == ':=' && n != '_' && n in app.cur_fn_names {
+			if (assign.tok == ':=' || convert_to_decl) && n != '_' && n in app.cur_fn_names {
 				n = app.unique_name_anti_shadow(n)
 			}
 			app.cur_fn_names[n] = true
@@ -67,12 +158,12 @@ fn (mut app App) assign_stmt(assign AssignStmt, no_mut bool) {
 		}
 	}
 
-	// Special case for 'append()' => '<<'
-	if app.check_and_handle_append(assign) {
-		return
+	// Use := for named return param conversion
+	if convert_to_decl {
+		app.gen(':=')
+	} else {
+		app.gen(assign.tok)
 	}
-
-	app.gen(assign.tok)
 
 	for r_idx, rhs_expr in assign.rhs {
 		mut needs_close_paren := false
@@ -102,6 +193,40 @@ fn (mut app App) assign_stmt(assign AssignStmt, no_mut bool) {
 		}
 	}
 	app.genln('')
+}
+
+fn (mut app App) is_append_call(assign AssignStmt) bool {
+	if assign.rhs.len == 0 {
+		return false
+	}
+	first_rhs := assign.rhs[0]
+	if first_rhs is CallExpr {
+		fun := first_rhs.fun
+		if fun is Ident {
+			if fun.name == 'append' {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+fn (mut app App) check_and_handle_append_early(assign AssignStmt) bool {
+	if !app.is_append_call(assign) {
+		return false
+	}
+	// Generate LHS without mut
+	for l_idx, lhs_expr in assign.lhs {
+		if l_idx > 0 {
+			app.gen(', ')
+		}
+		app.expr(lhs_expr)
+	}
+	first_rhs := assign.rhs[0]
+	if first_rhs is CallExpr {
+		app.gen_append(first_rhs.args, assign.tok)
+	}
+	return true
 }
 
 fn (mut app App) check_and_handle_append(assign AssignStmt) bool {
