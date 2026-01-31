@@ -64,11 +64,18 @@ fn (mut app App) array_init(c CompositeLit) {
 				if have_len {
 					app.gen(len_val)
 				}
-				app.gen(']${elt_name}{}')
+				app.gen(']')
+				if elt_is_selector {
+					app.force_upper = true
+					app.selector_expr(typ.elt as SelectorExpr)
+				} else {
+					app.gen(elt_name)
+				}
+				app.gen('{}')
 			} else {
 				match c.elts[0] {
-					BasicLit, CallExpr, CompositeLit, Ident, IndexExpr, SelectorExpr, StarExpr,
-					UnaryExpr {
+					BasicLit, BinaryExpr, CallExpr, CompositeLit, Ident, IndexExpr, SelectorExpr,
+					StarExpr, UnaryExpr {
 						for i, elt in c.elts {
 							if i > 0 {
 								app.gen(',')
@@ -278,14 +285,45 @@ fn (mut app App) map_init(node CompositeLit) {
 			comp := kv.value as CompositeLit
 			// Check if map value type is an array - generate array literal
 			if map_typ.val is ArrayType {
+				arr_typ := map_typ.val as ArrayType
 				app.gen('[')
 				for i, e in comp.elts {
 					if i > 0 {
 						app.gen(', ')
 					}
-					app.expr(e)
+					// Handle implicit struct in array
+					if e is CompositeLit && (e as CompositeLit).typ is InvalidExpr {
+						e_comp := e as CompositeLit
+						// Get array element type and prefix the struct literal
+						match arr_typ.elt {
+							Ident {
+								app.force_upper = true
+								app.gen(app.go2v_ident(arr_typ.elt.name))
+							}
+							SelectorExpr {
+								app.force_upper = true
+								app.selector_expr(arr_typ.elt)
+							}
+							else {}
+						}
+						app.gen('{')
+						for j, field in e_comp.elts {
+							if j > 0 {
+								app.gen(', ')
+							}
+							app.expr(field)
+						}
+						app.gen('}')
+					} else {
+						app.expr(e)
+					}
 				}
 				app.gen(']')
+			} else if map_typ.val is MapType {
+				// Nested map - generate map literal with explicit type
+				nested_map_typ := map_typ.val as MapType
+				app.map_type(nested_map_typ)
+				app.nested_map_init(comp, nested_map_typ)
 			} else {
 				// Implicit struct value - need to prefix with map's value type
 				app.force_upper = true
@@ -310,6 +348,63 @@ fn (mut app App) map_init(node CompositeLit) {
 					app.genln('')
 				}
 				app.gen('}')
+			}
+		} else {
+			app.expr(kv.value)
+		}
+		app.genln('')
+	}
+	app.gen('}')
+}
+
+fn (mut app App) nested_map_init(comp CompositeLit, map_typ MapType) {
+	app.genln('{')
+	for elt in comp.elts {
+		kv := elt as KeyValueExpr
+		// Handle key
+		if kv.key is Ident {
+			app.gen('\t${app.go2v_ident(kv.key.name)}: ')
+		} else {
+			app.expr(kv.key)
+			app.gen(': ')
+		}
+		// Handle value - check if it's an implicit initialization
+		if kv.value is CompositeLit && (kv.value as CompositeLit).typ is InvalidExpr {
+			inner_comp := kv.value as CompositeLit
+			// Check if map value type is an array - generate array literal
+			if map_typ.val is ArrayType {
+				arr_typ := map_typ.val as ArrayType
+				app.gen('[')
+				for i, e in inner_comp.elts {
+					if i > 0 {
+						app.gen(', ')
+					}
+					// Handle implicit struct in array
+					if e is CompositeLit && (e as CompositeLit).typ is InvalidExpr {
+						e_comp := e as CompositeLit
+						// Get array element type and prefix the struct literal
+						match arr_typ.elt {
+							Ident {
+								app.force_upper = true
+								app.gen(app.go2v_ident(arr_typ.elt.name))
+							}
+							else {}
+						}
+						app.gen('{')
+						for j, field in e_comp.elts {
+							if j > 0 {
+								app.gen(', ')
+							}
+							app.expr(field)
+						}
+						app.gen('}')
+					} else {
+						app.expr(e)
+					}
+				}
+				app.gen(']')
+			} else {
+				app.expr(kv.value)
 			}
 		} else {
 			app.expr(kv.value)

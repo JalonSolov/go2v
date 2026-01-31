@@ -54,6 +54,9 @@ fn (mut app App) stmt(stmt Stmt) {
 		SwitchStmt {
 			app.switch_stmt(stmt)
 		}
+		SendStmt {
+			app.send_stmt(stmt)
+		}
 		TypeSwitchStmt {
 			app.type_switch_stmt(stmt)
 		}
@@ -159,21 +162,27 @@ fn (mut app App) defer_stmt(node DeferStmt) {
 	// `defer fn() { ... } ()
 	// empty function, just generate `defer { ... }` in V
 
+	was_in_defer := app.in_defer_block
+	app.in_defer_block = true
+
 	if node.call is CallExpr && node.call.args.len == 0 {
 		if node.call.fun is FuncLit {
 			func_lit := node.call.fun as FuncLit
 			app.block_stmt(func_lit.body)
 		} else {
+			// Simple function call with no args: defer foo() => defer { foo() }
 			app.genln('{')
-			app.expr(node.call.fun) // TODO broken no () after foo.bar
+			app.expr(node.call.fun)
+			app.genln('()')
 			app.genln('}')
-			// app.genln('// UNKNOWN node.call.fun ${node.call.fun.type_name()}')
 		}
 	} else {
 		app.genln('{')
 		app.expr(node.call)
 		app.genln('}')
 	}
+
+	app.in_defer_block = was_in_defer
 }
 
 fn (mut app App) expr_stmt(stmt ExprStmt) {
@@ -235,12 +244,19 @@ fn (mut app App) for_stmt(f ForStmt) {
 
 fn (mut app App) go_stmt(stmt GoStmt) {
 	app.gen('go ')
+	app.in_go_stmt = true
 	app.expr(stmt.call)
+	app.in_go_stmt = false
 }
 
 fn (mut app App) if_stmt(node IfStmt) {
 	if node.init.tok != '' {
-		app.assign_stmt(node.init, false)
+		// Check if the init contains an atomic.Add operation that needs splitting
+		if app.is_atomic_add_init(node.init) {
+			app.handle_atomic_add_init(node.init)
+		} else {
+			app.assign_stmt(node.init, false)
+		}
 	}
 
 	app.gen('if ')
@@ -261,6 +277,68 @@ fn (mut app App) if_stmt(node IfStmt) {
 		app.genln('else')
 		app.block_stmt(node.else_)
 	}
+}
+
+// Check if the init statement contains an atomic.Add operation
+fn (app App) is_atomic_add_init(init AssignStmt) bool {
+	if init.rhs.len == 0 {
+		return false
+	}
+	if init.rhs[0] is CallExpr {
+		call := init.rhs[0] as CallExpr
+		if call.fun is SelectorExpr {
+			sel := call.fun as SelectorExpr
+			if sel.x is Ident {
+				ident := sel.x as Ident
+				if ident.name == 'atomic' && sel.sel.name.starts_with('Add') {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// Handle atomic.Add in if init by splitting into separate statements
+fn (mut app App) handle_atomic_add_init(init AssignStmt) {
+	// For: counter := atomic.AddInt32(&wg.counter, delta)
+	// Generate:
+	//   wg.counter += delta
+	//   mut counter := wg.counter
+	if init.rhs.len > 0 && init.rhs[0] is CallExpr {
+		call := init.rhs[0] as CallExpr
+		if call.args.len >= 2 {
+			// Generate the add operation
+			if call.args[0] is UnaryExpr {
+				ux := call.args[0] as UnaryExpr
+				app.expr(ux.x)
+				app.gen(' += ')
+				app.expr(call.args[1])
+				app.genln('')
+				// Generate the variable declaration
+				for l_idx, lhs_expr in init.lhs {
+					if l_idx == 0 {
+						app.gen('mut ')
+					} else {
+						app.gen(', ')
+					}
+					if lhs_expr is Ident {
+						n := app.go2v_ident(lhs_expr.name)
+						app.cur_fn_names[n] = true
+						app.gen(n)
+					} else {
+						app.expr(lhs_expr)
+					}
+				}
+				app.gen(' := ')
+				app.expr(ux.x)
+				app.genln('')
+				return
+			}
+		}
+	}
+	// Fallback to regular assignment
+	app.assign_stmt(init, false)
 }
 
 fn (mut app App) inc_dec_stmt(i IncDecStmt) {
@@ -299,6 +377,11 @@ fn (mut app App) range_stmt(node RangeStmt) {
 }
 
 fn (mut app App) return_stmt(node ReturnStmt) {
+	// V doesn't allow return inside defer blocks
+	if app.in_defer_block {
+		app.genln('// return inside defer not supported in V')
+		return
+	}
 	app.gen('return ')
 	for i, result in node.results {
 		app.expr(result)
@@ -306,5 +389,23 @@ fn (mut app App) return_stmt(node ReturnStmt) {
 			app.gen(',')
 		}
 	}
+	app.genln('')
+}
+
+fn (mut app App) send_stmt(node SendStmt) {
+	app.expr(node.chan_)
+	app.gen(' <- ')
+	// Handle struct{}{} (empty struct value) by sending true for chan bool
+	if node.value is CompositeLit {
+		cl := node.value as CompositeLit
+		if cl.typ is StructType {
+			st := cl.typ as StructType
+			if st.fields.list.len == 0 {
+				app.genln('true')
+				return
+			}
+		}
+	}
+	app.expr(node.value)
 	app.genln('')
 }

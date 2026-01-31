@@ -71,7 +71,18 @@ fn (mut app App) global_decl(spec ValueSpec) {
 		match spec.typ.node_type {
 			'Ident' {
 				app.gen(' ')
-				app.genln(spec.typ.name)
+				app.genln(go2v_type(spec.typ.name))
+			}
+			'SelectorExpr', 'StarExpr', 'ArrayType', 'MapType', 'FuncType' {
+				// For complex types, use the name as-is since we only have node_type info
+				// This results in a type placeholder that needs manual fixing
+				app.gen(' ')
+				if spec.typ.name != '' {
+					app.genln(spec.typ.name)
+				} else {
+					// No name available, output a placeholder
+					app.genln('voidptr // TODO: complex type')
+				}
 			}
 			'InvalidExpr' {
 				app.gen(' = ')
@@ -81,11 +92,17 @@ fn (mut app App) global_decl(spec ValueSpec) {
 				app.genln('')
 			}
 			else {
+				// For other type nodes, try to use value or leave blank
 				if spec.values.len > 0 {
 					app.gen(' = ')
 					app.expr(spec.values[0])
+					app.genln('')
+				} else if spec.typ.name != '' {
+					app.gen(' ')
+					app.genln(spec.typ.name)
+				} else {
+					app.genln(' voidptr // TODO: unknown type')
 				}
-				app.genln('')
 			}
 		}
 	}
@@ -99,11 +116,20 @@ fn (mut app App) const_decl(spec ValueSpec) {
 		if app.contains_iota(first_val) {
 			app.is_enum_decl = true
 			// Use the type from the spec if available (for cases like `const X SomeType = iota`)
-			// Otherwise fall back to type_decl_name
-			enum_name := if spec.typ.node_type == 'Ident' && spec.typ.name != '' {
+			// Otherwise fall back to type_decl_name or generate from first const name
+			mut enum_name := if spec.typ.node_type == 'Ident' && spec.typ.name != '' {
 				spec.typ.name
-			} else {
+			} else if app.type_decl_name != '' {
 				app.type_decl_name
+			} else if spec.names.len > 0 {
+				// Generate synthetic enum name from first const name
+				spec.names[0].name.capitalize() + 'Enum'
+			} else {
+				'UnnamedEnum'
+			}
+			// Single letter names need to be doubled (V requires > 1 char)
+			if enum_name.len == 1 {
+				enum_name = enum_name.capitalize() + enum_name.capitalize()
 			}
 			app.genln('enum ${enum_name} {')
 		}
@@ -142,7 +168,8 @@ fn (mut app App) const_decl(spec ValueSpec) {
 	}
 }
 
-const master_module_path = 'github.com.evanw.esbuild.internal' // TODO hardcoded
+// TODO hardcoded esbuild paths
+const master_module_paths = ['github.com.evanw.esbuild.internal', 'github.com.evanw.esbuild.pkg']
 
 fn (mut app App) import_spec(spec ImportSpec) {
 	mut name := spec.path.value.replace('"', '').replace('/', '.')
@@ -155,7 +182,7 @@ fn (mut app App) import_spec(spec ImportSpec) {
 		return
 	}
 	// Skip modules that don't have V equivalents
-	if name in ['bufio', 'mime.multipart', 'os.user'] {
+	if name in ['bufio', 'mime.multipart', 'os.user', 'sync.atomic'] {
 		return
 	}
 	// Go to V module mappings
@@ -169,14 +196,17 @@ fn (mut app App) import_spec(spec ImportSpec) {
 		'net.http.cookiejar' { name = 'net.http' }
 		else {}
 	}
-	if name.starts_with(master_module_path) {
-		n := name.replace(master_module_path, '')
-		app.gen('import ${n[1..]}')
-		if spec.name.name != '' {
-			app.gen(' as ${spec.name.name}')
+	// Check if it's a local module (internal or pkg)
+	for master_module_path in master_module_paths {
+		if name.starts_with(master_module_path) {
+			n := name.replace(master_module_path, '')
+			app.gen('import ${n[1..]}')
+			if spec.name.name != '' {
+				app.gen(' as ${spec.name.name}')
+			}
+			app.genln(' // local module')
+			return
 		}
-		app.genln(' // local module')
-		return
 	}
 	// Handle golang.org/x/ imports by stripping the prefix
 	if name.starts_with('golang.org.x.') {
@@ -200,10 +230,10 @@ fn (mut app App) import_spec(spec ImportSpec) {
 }
 
 fn (mut app App) struct_decl(struct_name string, spec StructType) {
-	// Convert struct name - single capital letters need to be doubled (reserved for generics in V)
+	// Convert struct name - single letter names need to be doubled (V requires > 1 char)
 	mut v_struct_name := struct_name
-	if struct_name.len == 1 && struct_name[0].is_capital() {
-		v_struct_name = struct_name + struct_name
+	if struct_name.len == 1 {
+		v_struct_name = struct_name.capitalize() + struct_name.capitalize()
 	}
 	// Check for name collision with existing global names
 	if v_struct_name in app.global_names {
@@ -227,6 +257,18 @@ fn (mut app App) struct_decl(struct_name string, spec StructType) {
 			// Embedded struct - skip if it's a pointer type (V doesn't support embedded pointers)
 			if field.typ is StarExpr {
 				continue
+			}
+			// Skip primitive type embeddings (V only allows struct embeddings)
+			// Generate a named field instead for primitive types
+			if field.typ is Ident {
+				ident := field.typ as Ident
+				conversion := go2v_type_checked(ident.name)
+				if conversion.is_basic {
+					// Primitive type - generate as a named field
+					app.genln('pub mut:')
+					app.genln('\t${ident.name.camel_to_snake()} ${conversion.v_type}')
+					continue
+				}
 			}
 			app.gen('\t')
 			app.force_upper = true
@@ -278,7 +320,12 @@ fn (mut app App) struct_type(spec StructType) {
 }
 
 fn (mut app App) interface_decl(interface_name string, spec InterfaceType) {
-	app.genln('interface ${interface_name} {')
+	// Convert interface name - single letter names need to be doubled (V requires > 1 char)
+	mut v_interface_name := interface_name
+	if interface_name.len == 1 {
+		v_interface_name = interface_name.capitalize() + interface_name.capitalize()
+	}
+	app.genln('interface ${v_interface_name} {')
 	for field in spec.methods.list {
 		app.comments(field.doc)
 		for n in field.names {

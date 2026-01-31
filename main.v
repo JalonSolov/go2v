@@ -14,11 +14,14 @@ mut:
 	is_fn_call          bool // for lowercase idents
 	tests_ok            bool = true
 	skip_first_arg      bool // for `strings.Replace(s...)` => `s.replace(...)`
+	skip_call_parens    bool // skip generating () and args for fully-handled calls
 	force_upper         bool // for `field Type` in struct decl, `mod.UpperCase` types etc
 	no_star             bool // To skip & in StarExpr in type matches  (interfaces)
 	type_decl_name      string
 	is_enum_decl        bool
 	is_mut_recv         bool              // so that `mut f Foo` is generated instead of `mut f &Foo`
+	in_go_stmt          bool              // inside a go statement (don't convert IIFE to block)
+	in_defer_block      bool              // inside a defer block (return not allowed)
 	cur_fn_names        map[string]bool   // for fixing shadowing
 	name_mapping        map[string]string // Go name to V name mapping for renamed variables
 	running_test        bool              // disables shadowing for now

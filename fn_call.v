@@ -8,6 +8,28 @@ fn (mut app App) call_expr(call CallExpr) {
 	// fmt.Println => println
 	fun := call.fun
 
+	// Handle IIFE (Immediately Invoked Function Expression)
+	// Go: func() { ... }()  or  (func() { ... })()  =>  V: { ... }
+	// V doesn't support IIFE syntax, so convert to a block for simple cases
+	// But not for go statements - those need the function literal syntax
+	if call.args.len == 0 && !app.in_go_stmt {
+		mut func_lit := FuncLit{}
+		mut is_iife := false
+		if fun is FuncLit {
+			func_lit = fun
+			is_iife = true
+		} else if fun is ParenExpr {
+			if fun.x is FuncLit {
+				func_lit = fun.x
+				is_iife = true
+			}
+		}
+		if is_iife && func_lit.typ.results.list.len == 0 {
+			app.block_stmt(func_lit.body)
+			return
+		}
+	}
+
 	// Handle type cast: (int)(x) => isize(x)
 	if fun is ParenExpr {
 		inner := fun.x
@@ -112,6 +134,12 @@ fn (mut app App) call_expr(call CallExpr) {
 		}
 	}
 
+	// Check if call was fully handled (e.g., atomic operations)
+	if app.skip_call_parens {
+		app.skip_call_parens = false
+		return
+	}
+
 	// Can be empty if not println
 	fn_name = app.go2v_ident(fn_name)
 
@@ -183,7 +211,7 @@ fn (mut app App) call_expr(call CallExpr) {
 	app.gen(')')
 }
 
-const nonexistent_modules = ['fmt', 'path', 'strings']
+const nonexistent_modules = ['fmt', 'path', 'strings', 'atomic', 'unsafe']
 
 fn (mut app App) selector_expr_fn_call(call CallExpr, sel SelectorExpr) {
 	if sel.x is Ident {
@@ -239,7 +267,91 @@ fn (mut app App) handle_nonexistent_module_call(sel SelectorExpr, mod_name strin
 		'fmt' {
 			app.handle_fmt_call(app.go2v_ident(fn_name), node.args)
 		}
+		'atomic' {
+			app.handle_atomic_call(fn_name, node.args)
+		}
+		'unsafe' {
+			app.handle_unsafe_call(fn_name, node.args)
+		}
 		else {}
+	}
+}
+
+fn (mut app App) handle_unsafe_call(fn_name string, args []Expr) {
+	// Translate unsafe operations to V equivalents
+	// unsafe.Pointer(&x) => voidptr(&x)
+	// unsafe.Sizeof(x) => sizeof(x)
+	app.skip_call_parens = true
+	match fn_name {
+		'Pointer' {
+			app.gen('voidptr(')
+			if args.len > 0 {
+				app.expr(args[0])
+			}
+			app.gen(')')
+		}
+		'Sizeof' {
+			app.gen('sizeof(')
+			if args.len > 0 {
+				app.expr(args[0])
+			}
+			app.gen(')')
+		}
+		else {
+			// Fallback - output as comment
+			app.gen('/* unsafe.${fn_name} */')
+		}
+	}
+}
+
+fn (mut app App) handle_atomic_call(fn_name string, args []Expr) {
+	// Translate atomic operations to simple assignments/reads
+	// atomic.StoreXxx(ptr, val) => *ptr = val
+	// atomic.LoadXxx(ptr) => *ptr
+	// atomic.AddXxx(ptr, delta) => { *ptr += delta; *ptr }
+	app.skip_call_parens = true
+	if fn_name.starts_with('Store') {
+		// atomic.StoreUint32(&x, val) => x = val
+		if args.len >= 2 {
+			if args[0] is UnaryExpr {
+				// Skip the & and just use the target
+				app.expr((args[0] as UnaryExpr).x)
+			} else {
+				app.gen('*')
+				app.expr(args[0])
+			}
+			app.gen(' = ')
+			app.expr(args[1])
+		}
+	} else if fn_name.starts_with('Load') {
+		// atomic.LoadUint32(&x) => x
+		if args.len >= 1 {
+			if args[0] is UnaryExpr {
+				app.expr((args[0] as UnaryExpr).x)
+			} else {
+				app.gen('*')
+				app.expr(args[0])
+			}
+		}
+	} else if fn_name.starts_with('Add') {
+		// atomic.AddInt64(&x, delta) - this is usually handled specially in if_stmt
+		// If we get here, just generate a simple add (losing the return value)
+		if args.len >= 2 {
+			if args[0] is UnaryExpr {
+				ux := args[0] as UnaryExpr
+				app.expr(ux.x)
+				app.gen(' += ')
+				app.expr(args[1])
+			} else {
+				app.gen('*')
+				app.expr(args[0])
+				app.gen(' += ')
+				app.expr(args[1])
+			}
+		}
+	} else {
+		// Fallback: just output the function name and args
+		app.gen('/* atomic.${fn_name} */ ')
 	}
 }
 

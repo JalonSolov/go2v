@@ -70,11 +70,71 @@ fn go2v_type_checked(typ string) TypeConversion {
 }
 
 // V keywords that need escaping - split into regular keywords and literals
-const v_keywords = ['match', 'in', 'fn', 'as', 'enum', 'typeof']
+// V keywords that need escaping in identifiers
+// Only include keywords that cause issues when used as variable/function names
+const v_keywords = ['match', 'in', 'fn', 'as', 'enum', 'typeof', 'or', 'and', 'is', 'not']
 const v_literals = ['true', 'false', 'none'] // These are only escaped when converted from different case
+
+// Greek letters to ASCII equivalents for V compatibility
+const greek_to_ascii = {
+	'α': 'alpha'
+	'β': 'beta'
+	'γ': 'gamma'
+	'δ': 'delta'
+	'ε': 'epsilon'
+	'ζ': 'zeta'
+	'η': 'eta'
+	'θ': 'theta'
+	'ι': 'iota_'
+	'κ': 'kappa'
+	'λ': 'lambda_'
+	'μ': 'mu'
+	'ν': 'nu'
+	'ξ': 'xi'
+	'π': 'pi'
+	'ρ': 'rho'
+	'σ': 'sigma'
+	'τ': 'tau'
+	'υ': 'upsilon'
+	'φ': 'phi'
+	'χ': 'chi'
+	'ψ': 'psi'
+	'ω': 'omega'
+	// Uppercase Greek
+	'Α': 'Alpha'
+	'Β': 'Beta'
+	'Γ': 'Gamma'
+	'Δ': 'Delta'
+	'Ε': 'Epsilon'
+	'Ζ': 'Zeta'
+	'Η': 'Eta'
+	'Θ': 'Theta'
+	'Ι': 'Iota'
+	'Κ': 'Kappa'
+	'Λ': 'Lambda'
+	'Μ': 'Mu'
+	'Ν': 'Nu'
+	'Ξ': 'Xi'
+	'Π': 'Pi'
+	'Ρ': 'Rho'
+	'Σ': 'Sigma'
+	'Τ': 'Tau'
+	'Υ': 'Upsilon'
+	'Φ': 'Phi'
+	'Χ': 'Chi'
+	'Ψ': 'Psi'
+	'Ω': 'Omega'
+}
 
 fn (mut app App) go2v_ident(ident string) string {
 	mut id := ident
+
+	// Convert Greek letters to ASCII
+	for greek, ascii in greek_to_ascii {
+		if id.contains(greek) {
+			id = id.replace(greek, ascii)
+		}
+	}
 
 	if id == 'nil' {
 		return 'unsafe { nil }'
@@ -84,9 +144,9 @@ fn (mut app App) go2v_ident(ident string) string {
 	if ident in app.struct_or_alias {
 		was_force_upper := app.force_upper
 		app.force_upper = false // Reset force_upper even for early return
-		// Single capital letter names need to be doubled (reserved for generics in V)
-		if id.len == 1 && id[0].is_capital() {
-			return id + id
+		// Single letter names need to be doubled (reserved for generics in V)
+		if id.len == 1 {
+			return id.capitalize() + id.capitalize()
 		}
 		// Type aliases in V must start with capital letter
 		if was_force_upper && !id[0].is_capital() {

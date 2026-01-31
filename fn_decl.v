@@ -8,7 +8,13 @@ fn (mut app App) func_decl(decl FuncDecl) {
 	app.force_upper = false // Reset force_upper at function boundary
 	app.genln('')
 	app.comments(decl.doc)
-	mut method_name := app.go2v_ident(decl.name.name) // decl.name.name.to_lower()
+	// Function names must always be snake_case in V, regardless of whether
+	// the name matches a type/struct name (which go2v_ident would preserve)
+	mut method_name := decl.name.name.camel_to_snake()
+	// Escape V keywords
+	if method_name in v_keywords {
+		method_name = method_name + '_'
+	}
 	// Check for name collision with existing global names
 	if method_name in app.global_names {
 		mut i := 1
@@ -38,6 +44,9 @@ fn (mut app App) func_decl(decl FuncDecl) {
 	}
 
 	// Detect interface{} parameters and prepare for generic conversion
+	// V requires single-character generic type names
+	generic_type_names := ['T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'A', 'B', 'C', 'D', 'E', 'F', 'G',
+		'H']
 	mut generic_params := map[string]string{} // param_name -> generic_type_name
 	mut generic_counter := 0
 	for param in decl.typ.params.list {
@@ -46,7 +55,11 @@ fn (mut app App) func_decl(decl FuncDecl) {
 			if iface.methods.list.len == 0 {
 				// Empty interface{} - convert to generic
 				for name in param.names {
-					generic_type := if generic_counter == 0 { 'T' } else { 'T${generic_counter}' }
+					generic_type := if generic_counter < generic_type_names.len {
+						generic_type_names[generic_counter]
+					} else {
+						'T' // fallback
+					}
 					generic_params[name.name] = generic_type
 					generic_counter++
 				}
@@ -99,6 +112,7 @@ fn (mut app App) func_decl(decl FuncDecl) {
 	}
 	app.func_params_with_generics(decl.typ.params, generic_params)
 	app.func_return_type(decl.typ.results)
+	app.gen(' ') // Space before block
 	app.block_stmt(decl.body)
 }
 
@@ -112,6 +126,11 @@ fn (mut app App) func_return_type(results FieldList) {
 	// app.genln(results)
 	// Return types
 	return_types := results.list
+	if return_types.len == 0 {
+		return
+	}
+	// Add space before return type(s)
+	app.gen(' ')
 	needs_pars := return_types.len > 1
 	//|| (return_types.len > 0 && return_types[0].names.len > 0	&& return_types[0].names[0].name != '')
 	if needs_pars {
@@ -151,7 +170,8 @@ fn (mut app App) func_params(params FieldList) {
 				// Parameter names must be lowercase in V
 				saved_force_upper := app.force_upper
 				app.force_upper = false
-				app.gen(app.go2v_ident(name.name))
+				v_name := app.go2v_ident(name.name)
+				app.gen(v_name)
 				app.force_upper = saved_force_upper
 				app.gen(' ')
 				app.force_upper = true
@@ -159,7 +179,7 @@ fn (mut app App) func_params(params FieldList) {
 				if j < param.names.len - 1 {
 					app.gen(',')
 				}
-				app.cur_fn_names[name.name] = true // Register the parameter in this scope to fix shadowin
+				app.cur_fn_names[v_name] = true // Register the V name for shadowing detection
 			}
 		}
 		// app.gen(type_or_ident(param.typ))
@@ -181,7 +201,8 @@ fn (mut app App) func_params_with_generics(params FieldList, generic_params map[
 				// Parameter names must be lowercase in V
 				saved_force_upper := app.force_upper
 				app.force_upper = false
-				app.gen(app.go2v_ident(name.name))
+				v_name := app.go2v_ident(name.name)
+				app.gen(v_name)
 				app.force_upper = saved_force_upper
 				app.gen(' ')
 				// Check if this parameter should use a generic type
@@ -194,7 +215,7 @@ fn (mut app App) func_params_with_generics(params FieldList, generic_params map[
 				if j < param.names.len - 1 {
 					app.gen(',')
 				}
-				app.cur_fn_names[name.name] = true
+				app.cur_fn_names[v_name] = true // Register the V name for shadowing detection
 			}
 		}
 		if i < params.list.len - 1 {
@@ -216,6 +237,7 @@ fn (mut app App) comments(doc Doc) {
 fn (mut app App) func_lit(node FuncLit) {
 	app.gen('fn ')
 	app.func_params(node.typ.params)
-	// app.genln('/*params=${node.typ.params} */')
+	app.func_return_type(node.typ.results)
+	app.gen(' ') // Space before block
 	app.block_stmt(node.body)
 }

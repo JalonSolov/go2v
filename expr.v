@@ -111,18 +111,44 @@ fn (mut app App) binary_expr(b BinaryExpr) {
 			app.expr(y)
 		}
 	} else {
+		// Wrap composite literals in parentheses when used in comparisons
+		// V parser gets confused by {} in binary expressions
+		x_needs_parens := b.x is CompositeLit
+		y_needs_parens := b.y is CompositeLit
+
+		if x_needs_parens {
+			app.gen('(')
+		}
 		app.expr(b.x)
+		if x_needs_parens {
+			app.gen(')')
+		}
 		if b.op == '\u0026^' {
 			app.gen('&~')
 		} else {
 			app.gen(b.op)
 		}
+		if y_needs_parens {
+			app.gen('(')
+		}
 		app.expr(b.y)
+		if y_needs_parens {
+			app.gen(')')
+		}
 	}
 }
 
 fn (mut app App) chan_type(node ChanType) {
 	app.gen('chan ')
+	// In Go, chan struct{} is used for signaling with no data
+	// V doesn't support empty struct types, so use bool instead
+	if node.value is StructType {
+		st := node.value as StructType
+		if st.fields.list.len == 0 {
+			app.gen('bool')
+			return
+		}
+	}
 	app.expr(node.value)
 }
 
@@ -176,7 +202,7 @@ fn (mut app App) map_type(node MapType) {
 	}
 	app.gen(']')
 	match node.val {
-		ArrayType, Ident, InterfaceType, SelectorExpr, StarExpr {
+		ArrayType, FuncType, Ident, InterfaceType, MapType, SelectorExpr, StarExpr {
 			app.typ(node.val)
 		}
 		StructType {
@@ -197,17 +223,58 @@ fn quoted_lit(s string, quote string) string {
 	go_quote := s[0]
 	mut no_quotes := s[1..s.len - 1]
 
+	// For rune literals (backticks), V supports escape sequences directly
+	// Special case: if the rune IS a backtick, we need to escape it as `\``
+	if quote == '`' {
+		if no_quotes == '`' {
+			return r'`\``'
+		}
+		return '`${no_quotes}`'
+	}
+
 	mut prefix := ''
 	if go_quote == `\`` {
 		prefix = 'r'
 	}
 
 	// Determine which V quote style to use
-	if prefix != 'r' {
+	if prefix == 'r' {
+		// Raw string: check if it contains quotes
+		has_single := no_quotes.contains("'")
+		has_double := no_quotes.contains('"')
+
+		if has_single && has_double {
+			// Contains both quote types - can't use raw string
+			// Convert to regular escaped string
+			prefix = ''
+			quote2 = '"'
+			// Escape backslashes first (so we don't double-escape later escapes)
+			no_quotes = no_quotes.replace('\\', '\\\\')
+			// Escape double quotes
+			no_quotes = no_quotes.replace('"', '\\"')
+		} else if has_single {
+			// V raw strings r'...' can't contain literal ', so use r"..." instead
+			quote2 = '"'
+		}
+		// else: no single quotes, use r'...' (default)
+	} else {
 		has_single := no_quotes.contains("'")
 		has_escaped_double := no_quotes.contains('\\"')
+		// Check for escape sequences that require double quotes in V
+		// In V, single quotes treat backslash literally, double quotes process escapes
+		has_escape_seq := no_quotes.contains('\\n') || no_quotes.contains('\\t')
+			|| no_quotes.contains('\\r') || no_quotes.contains('\\x') || no_quotes.contains('\\u')
+			|| no_quotes.contains('\\0') || no_quotes.contains('\\a') || no_quotes.contains('\\b')
+			|| no_quotes.contains('\\f') || no_quotes.contains('\\v')
 
-		if has_single && has_escaped_double {
+		if has_escape_seq {
+			// Must use double quotes to process escape sequences
+			quote2 = '"'
+			// Unescape double quotes since we're now using double quotes
+			if has_escaped_double {
+				// Keep the escaping since we're using double quotes
+			}
+		} else if has_single && has_escaped_double {
 			// String has both ' and \" - use double quotes and keep escaping
 			quote2 = '"'
 		} else if has_single {
@@ -221,8 +288,10 @@ fn quoted_lit(s string, quote string) string {
 		// else: no special chars, use default single quotes
 	}
 
-	// Handle '`' => `\``
-	if go_quote == `'` {
+	// Escape $ and backticks in non-raw strings to prevent V from interpreting
+	// ${} as string interpolation or sequences like "2n`" as string prefixes
+	if prefix != 'r' {
+		no_quotes = no_quotes.replace('$', '\\$')
 		no_quotes = no_quotes.replace('`', '\\`')
 	}
 

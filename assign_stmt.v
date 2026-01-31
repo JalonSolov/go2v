@@ -1,11 +1,12 @@
 // Copyright (c) 2024 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by a GPL license that can be found in the LICENSE file.
 
-fn (mut app App) unique_name_anti_shadow(n string) string {
+fn (mut app App) unique_name_anti_shadow(n string, force_rename ...bool) string {
 	if n == '_' {
 		return '_'
 	}
-	if n !in app.cur_fn_names {
+	// If force_rename is false (default) and name not in scope, return as-is
+	if (force_rename.len == 0 || !force_rename[0]) && n !in app.cur_fn_names {
 		return n
 	}
 	// Increase the i in `name_i` until it's unique.
@@ -94,6 +95,11 @@ fn (mut app App) assign_stmt(assign AssignStmt, no_mut bool) {
 		return
 	}
 
+	// Special case for type assertion with comma-ok pattern: val, ok := x.(Type)
+	if app.check_and_handle_type_assertion(assign) {
+		return
+	}
+
 	// Check if this is an assignment to a named return param that needs to be converted to declaration
 	// But only if the LHS variable is NOT used on the RHS (to avoid circular reference)
 	mut convert_to_decl := false
@@ -143,8 +149,20 @@ fn (mut app App) assign_stmt(assign AssignStmt, no_mut bool) {
 			// Handle shadowing - convert to V name first before checking
 			go_name := lhs_expr.name // Original Go name
 			mut n := app.go2v_ident(go_name)
-			if (assign.tok == ':=' || convert_to_decl) && n != '_' && n in app.cur_fn_names {
-				n = app.unique_name_anti_shadow(n)
+			// Check for shadowing: either name already exists in scope, or
+			// the name appears in the RHS (self-referential declaration like `x := func(x)`)
+			mut needs_rename := n in app.cur_fn_names
+			if !needs_rename && (assign.tok == ':=' || convert_to_decl) && n != '_' {
+				// Check if this name appears in any RHS expression (self-referential declaration)
+				for rhs_expr in assign.rhs {
+					if app.expr_contains_ident(rhs_expr, go_name) {
+						needs_rename = true
+						break
+					}
+				}
+			}
+			if (assign.tok == ':=' || convert_to_decl) && n != '_' && needs_rename {
+				n = app.unique_name_anti_shadow(n, true)
 				// Queue the mapping for later - don't apply yet
 				pending_mappings[go_name] = n
 			}
@@ -311,4 +329,67 @@ fn (mut app App) gen_append(args []Expr, assign_tok string) {
 		}
 	}
 	app.genln('')
+}
+
+// Check and handle type assertion with comma-ok pattern: val, ok := x.(Type)
+fn (mut app App) check_and_handle_type_assertion(assign AssignStmt) bool {
+	// Only handle when there are exactly 2 LHS values and 1 RHS value
+	if assign.lhs.len != 2 || assign.rhs.len != 1 {
+		return false
+	}
+	// Check if RHS is a type assertion
+	if assign.rhs[0] !is TypeAssertExpr {
+		return false
+	}
+	ta := assign.rhs[0] as TypeAssertExpr
+
+	// Get the ok variable name (second LHS)
+	mut ok_name := '_'
+	if assign.lhs[1] is Ident {
+		go_ok_name := (assign.lhs[1] as Ident).name
+		ok_name = app.go2v_ident(go_ok_name)
+		if ok_name != '_' {
+			// Handle shadowing
+			if ok_name in app.cur_fn_names {
+				ok_name = app.unique_name_anti_shadow(ok_name, true)
+				app.name_mapping[go_ok_name] = ok_name
+			}
+			app.cur_fn_names[ok_name] = true
+		}
+	}
+
+	// Get the val variable name (first LHS)
+	mut val_name := '_'
+	if assign.lhs[0] is Ident {
+		go_val_name := (assign.lhs[0] as Ident).name
+		val_name = app.go2v_ident(go_val_name)
+		if val_name != '_' {
+			// Handle shadowing
+			if val_name in app.cur_fn_names {
+				val_name = app.unique_name_anti_shadow(val_name, true)
+				app.name_mapping[go_val_name] = val_name
+			}
+			app.cur_fn_names[val_name] = true
+		}
+	}
+
+	// Generate the 'is' check for the ok variable
+	if ok_name != '_' {
+		app.gen('mut ${ok_name} := ')
+		app.expr(ta.x)
+		app.gen(' is ')
+		app.typ(ta.typ)
+		app.genln('')
+	}
+
+	// If val is not discarded, generate the type cast
+	if val_name != '_' {
+		app.gen('mut ${val_name} := ')
+		app.expr(ta.x)
+		app.gen(' as ')
+		app.typ(ta.typ)
+		app.genln('')
+	}
+
+	return true
 }

@@ -5,7 +5,14 @@ import os
 
 type Decls = FuncDecl | GenDecl
 
-type MapVal = ArrayType | Ident | InterfaceType | SelectorExpr | StarExpr | StructType
+type MapVal = ArrayType
+	| FuncType
+	| Ident
+	| InterfaceType
+	| MapType
+	| SelectorExpr
+	| StarExpr
+	| StructType
 
 type Expr = InvalidExpr
 	| ArrayType
@@ -45,6 +52,7 @@ type Stmt = InvalidStmt
 	| LabeledStmt
 	| RangeStmt
 	| ReturnStmt
+	| SendStmt
 	| SwitchStmt
 	| TypeSwitchStmt
 
@@ -288,6 +296,12 @@ struct SelectorExpr {
 	node_type string @[json: '_type']
 	sel       Ident  @[json: 'Sel']
 	x         Expr   @[json: 'X']
+}
+
+struct SendStmt {
+	node_type string @[json: '_type']
+	chan_     Expr   @[json: 'Chan']
+	value     Expr   @[json: 'Value']
 }
 
 struct SliceExpr {

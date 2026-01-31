@@ -6,13 +6,12 @@ fn main() {
 	mut c := '\n\\'
 	mut d := r'\n\\'
 	mut e := "''"
-	mut f := r''
-	''
+	mut f := r"''"
 	mut g := r'\'
 	mut h := r'a"\">'
 	mut i := u8(`a`)
 	mut j := u8(`\\`)
-	mut k := u8("'")
+	mut k := u8(`'`)
 	mut l := u8(`\``)
 	mut m := l
 	mut n := '"'
