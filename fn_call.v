@@ -122,6 +122,36 @@ fn (mut app App) call_expr(call CallExpr) {
 			app.expr(call.args[0])
 			app.genln('.str()')
 			return
+		} else if fun.name == 'append' {
+			// Handle Go's append() used as an expression (e.g., in return statements)
+			// append(slice, elem1, elem2, ...) => slice + [elem1, elem2, ...]
+			// append(slice, other...) => slice + other
+			if call.args.len >= 2 {
+				app.expr(call.args[0])
+				// Check if last arg is Ellipsis (spread operator: other...)
+				last_arg := call.args[call.args.len - 1]
+				if last_arg is Ellipsis {
+					// append(slice, other...) => slice + other
+					app.gen(' + ')
+					// The Ellipsis wraps the actual value, but we need the elt
+					// For now, just output the expression which should handle it
+					app.expr(last_arg)
+				} else {
+					// append(slice, elem1, elem2, ...) => slice + [elem1, elem2, ...]
+					app.gen(' + [')
+					for i, arg in call.args[1..] {
+						if i > 0 {
+							app.gen(', ')
+						}
+						app.expr(arg)
+					}
+					app.gen(']')
+				}
+			} else if call.args.len == 1 {
+				// append(slice) => slice (no-op)
+				app.expr(call.args[0])
+			}
+			return
 		} else if fun.name != go2v_type(fun.name) {
 			app.gen(go2v_type(fun.name))
 			app.gen('(')
@@ -235,9 +265,11 @@ fn (mut app App) call_expr(call CallExpr) {
 					app.gen('mut ')
 					app.first_arg_needs_mut = false
 				}
-				// Use temp var if we extracted it earlier
+				// Use temp var if we extracted it earlier (from this call or pre-extracted in assign)
 				if idx in temp_var_names {
 					app.gen(temp_var_names[idx])
+				} else if '${idx}' in app.call_arg_temp_vars {
+					app.gen(app.call_arg_temp_vars['${idx}'])
 				} else {
 					app.expr(arg)
 				}
@@ -248,9 +280,11 @@ fn (mut app App) call_expr(call CallExpr) {
 				if idx > 0 {
 					app.gen(', ')
 				}
-				// Use temp var if we extracted it earlier
+				// Use temp var if we extracted it earlier (from this call or pre-extracted in assign)
 				if idx in temp_var_names {
 					app.gen(temp_var_names[idx])
+				} else if '${idx}' in app.call_arg_temp_vars {
+					app.gen(app.call_arg_temp_vars['${idx}'])
 				} else {
 					app.expr(arg)
 				}

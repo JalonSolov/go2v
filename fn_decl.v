@@ -140,9 +140,9 @@ fn (mut app App) func_decl(decl FuncDecl) {
 }
 
 fn (mut app App) func_type(t FuncType) {
-	// Skip 'fn ' prefix for interface method declarations
+	// Skip 'fn' prefix for interface method declarations
 	if !app.in_interface_decl {
-		app.gen('fn ')
+		app.gen('fn')
 	}
 	app.func_params_for_type(t.params)
 	app.func_return_type(t.results)
@@ -210,6 +210,10 @@ fn (mut app App) func_return_type(results FieldList) {
 }
 
 fn (mut app App) func_params(params FieldList) {
+	app.func_params_with_mutability(params, map[string]bool{})
+}
+
+fn (mut app App) func_params_with_mutability(params FieldList, mut_params map[string]bool) {
 	// p := params.list.map(it.names.map(it.name).join(', ') + ' ' + type_or_ident(it.typ)).join(', ')
 	app.gen('(')
 	// app.gen(p)
@@ -222,6 +226,17 @@ fn (mut app App) func_params(params FieldList) {
 			app.typ(param.typ)
 		} else {
 			for j, name in param.names {
+				// Check if this parameter needs to be mutable (reassigned in body)
+				// But only add mut for reference types - V doesn't allow mut for basic types
+				if name.name in mut_params {
+					// Only add mut for types that V allows: pointers, arrays, maps, structs, interfaces
+					is_ref_type := param.typ is StarExpr || param.typ is ArrayType
+						|| param.typ is MapType || param.typ is StructType
+						|| param.typ is InterfaceType
+					if is_ref_type {
+						app.gen('mut ')
+					}
+				}
 				// Parameter names must be lowercase in V
 				saved_force_upper := app.force_upper
 				app.force_upper = false
@@ -336,6 +351,9 @@ fn (mut app App) func_lit(node FuncLit) {
 		}
 	}
 
+	// Find parameters that are assigned in the closure body (need mut)
+	assigned_params := app.find_assigned_params(node.typ.params, node.body.list)
+
 	app.gen('fn ')
 	// Add capture list if there are captured variables
 	// In V, all captured variables that might be modified need 'mut'
@@ -351,7 +369,7 @@ fn (mut app App) func_lit(node FuncLit) {
 		}
 		app.gen('] ')
 	}
-	app.func_params(node.typ.params)
+	app.func_params_with_mutability(node.typ.params, assigned_params)
 	app.func_return_type(node.typ.results)
 	app.gen(' ') // Space before block
 	// Remove old name_mappings for parameter names before processing body
@@ -386,6 +404,21 @@ fn (mut app App) collect_declarations_from_stmt(stmt Stmt, mut declared map[stri
 				for lhs in stmt.lhs {
 					if lhs is Ident {
 						declared[lhs.name] = true
+					}
+				}
+			}
+		}
+		DeclStmt {
+			// var x type creates new declarations
+			if stmt.decl is GenDecl {
+				decl := stmt.decl as GenDecl
+				if decl.tok == 'var' {
+					for spec in decl.specs {
+						if spec is ValueSpec {
+							for n in spec.names {
+								declared[n.name] = true
+							}
+						}
 					}
 				}
 			}
@@ -641,4 +674,67 @@ fn (app App) is_indexed_access_on(recv_name string, expr Expr) bool {
 		else {}
 	}
 	return false
+}
+
+// Find parameters that are assigned (LHS of = assignment) in the function body
+// These need to be declared as mut in V
+fn (app App) find_assigned_params(params FieldList, stmts []Stmt) map[string]bool {
+	// Collect all parameter names
+	mut param_names := map[string]bool{}
+	for param in params.list {
+		for name in param.names {
+			if name.name != '' && name.name != '_' {
+				param_names[name.name] = true
+			}
+		}
+	}
+	// Find which parameters are assigned in the body
+	mut assigned := map[string]bool{}
+	app.find_assignments_in_stmts(stmts, param_names, mut assigned)
+	return assigned
+}
+
+fn (app App) find_assignments_in_stmts(stmts []Stmt, param_names map[string]bool, mut assigned map[string]bool) {
+	for stmt in stmts {
+		app.find_assignments_in_stmt(stmt, param_names, mut assigned)
+	}
+}
+
+fn (app App) find_assignments_in_stmt(stmt Stmt, param_names map[string]bool, mut assigned map[string]bool) {
+	match stmt {
+		AssignStmt {
+			// Only look at = assignments, not := declarations
+			if stmt.tok == '=' {
+				for lhs in stmt.lhs {
+					if lhs is Ident {
+						if lhs.name in param_names {
+							assigned[lhs.name] = true
+						}
+					}
+				}
+			}
+		}
+		BlockStmt {
+			app.find_assignments_in_stmts(stmt.list, param_names, mut assigned)
+		}
+		IfStmt {
+			app.find_assignments_in_stmts(stmt.body.list, param_names, mut assigned)
+			app.find_assignments_in_stmt(stmt.else_, param_names, mut assigned)
+		}
+		ForStmt {
+			app.find_assignments_in_stmts(stmt.body.list, param_names, mut assigned)
+		}
+		RangeStmt {
+			app.find_assignments_in_stmts(stmt.body.list, param_names, mut assigned)
+		}
+		SwitchStmt {
+			app.find_assignments_in_stmts(stmt.body.list, param_names, mut assigned)
+		}
+		CaseClause {
+			for s in stmt.body {
+				app.find_assignments_in_stmt(s, param_names, mut assigned)
+			}
+		}
+		else {}
+	}
 }

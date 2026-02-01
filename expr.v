@@ -85,6 +85,22 @@ fn (mut app App) array_type(node ArrayType) {
 	}
 	app.gen(']')
 	app.force_upper = force_upper
+	// Skip parentheses when array element is a ParenExpr containing FuncType
+	// Go: []func() -> V: []fn() (not [](fn()))
+	elt := node.elt
+	match elt {
+		ParenExpr {
+			if elt.x is FuncType {
+				app.func_type(elt.x)
+				return
+			}
+		}
+		FuncType {
+			app.func_type(elt)
+			return
+		}
+		else {}
+	}
 	app.expr(node.elt)
 }
 

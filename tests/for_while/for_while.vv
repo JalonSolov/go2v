@@ -3,6 +3,6 @@ module main
 fn main() {
 	mut n := isize(1)
 	for n < 5 {
-		n *= isize(2)
+		n *= 2
 	}
 }

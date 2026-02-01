@@ -129,7 +129,7 @@ fn (mut app App) global_decl(spec ValueSpec) {
 			StarExpr {
 				app.gen(' ')
 				app.typ(spec.typ)
-				app.genln(' = unsafe { nil }')
+				app.genln('')
 			}
 			ArrayType {
 				app.gen(' ')
@@ -144,7 +144,7 @@ fn (mut app App) global_decl(spec ValueSpec) {
 			FuncType {
 				app.gen(' ')
 				app.typ(spec.typ)
-				app.genln(' = unsafe { nil }')
+				app.genln('')
 			}
 			InvalidExpr {
 				app.gen(' = ')
@@ -232,12 +232,30 @@ fn (mut app App) const_decl(spec ValueSpec) {
 			app.genln(n)
 		} else {
 			app.gen('const ${n} = ')
+			// Check if there's an explicit type that needs casting (e.g., uint64)
+			mut needs_cast := false
+			mut cast_type := ''
+			if spec.typ is Ident {
+				ident := spec.typ as Ident
+				// Types that need explicit casting to avoid overflow
+				if ident.name in ['uint64', 'int64', 'uint32', 'int32', 'uint16', 'int16', 'uint8',
+					'int8'] {
+					needs_cast = true
+					cast_type = go2v_type(ident.name)
+				}
+			}
+			if needs_cast {
+				app.gen('${cast_type}(')
+			}
 			if i < spec.values.len {
 				app.last_const_expr = spec.values[i]
 				app.expr(spec.values[i])
 			} else if app.last_const_expr !is InvalidExpr {
 				// Reuse last expression for iota patterns without explicit value
 				app.expr(app.last_const_expr)
+			}
+			if needs_cast {
+				app.gen(')')
 			}
 			app.genln('')
 		}
@@ -258,14 +276,15 @@ fn (mut app App) import_spec(spec ImportSpec) {
 		return
 	}
 	// Skip modules that don't have V equivalents
+	// Note: 'bytes' and 'strings' are translated to V string methods, no import needed
 	if name in ['bufio', 'mime.multipart', 'sync.atomic', 'runtime.debug', 'runtime.pprof',
-		'runtime.trace', 'bytes', 'sort', 'runtime', 'syscall', 'errors', 'archive.zip', 'unicode'] {
+		'runtime.trace', 'sort', 'runtime', 'syscall', 'errors', 'archive.zip', 'unicode', 'bytes',
+		'strings'] {
 		return
 	}
 	// Go's os/user package maps to V's os module
 	if name == 'os.user' {
-		app.genln('import os')
-		return
+		name = 'os'
 	}
 	// Go to V module mappings
 	match name {
@@ -286,6 +305,10 @@ fn (mut app App) import_spec(spec ImportSpec) {
 		}
 		'net.url' {
 			// Use alias to maintain 'url' usage in code
+			if 'net.urllib' in app.imported_modules {
+				return
+			}
+			app.imported_modules['net.urllib'] = true
 			app.genln('import net.urllib as url')
 			return
 		}
@@ -294,6 +317,15 @@ fn (mut app App) import_spec(spec ImportSpec) {
 		}
 		'net.http.cookiejar' {
 			name = 'net.http'
+		}
+		'regexp' {
+			// V's regex module is called 'regex', use alias to maintain 'regexp' usage
+			if 'regex' in app.imported_modules {
+				return
+			}
+			app.imported_modules['regex'] = true
+			app.genln('import regex as regexp')
+			return
 		}
 		else {}
 	}
@@ -304,6 +336,10 @@ fn (mut app App) import_spec(spec ImportSpec) {
 			// Flatten the module structure - remove internal/ and pkg/ prefixes
 			// This avoids V module resolution issues with nested directories
 			n = n.replace('internal.', '').replace('pkg.', '')
+			if n in app.imported_modules {
+				return
+			}
+			app.imported_modules[n] = true
 			app.gen('import ${n}')
 			if spec.name.name != '' {
 				app.gen(' as ${spec.name.name}')
@@ -319,6 +355,10 @@ fn (mut app App) import_spec(spec ImportSpec) {
 		if n.starts_with('sys') {
 			return
 		}
+		if n in app.imported_modules {
+			return
+		}
+		app.imported_modules[n] = true
 		app.gen('import ${n}')
 		if spec.name.name != '' {
 			app.gen(' as ${spec.name.name}')
@@ -330,6 +370,11 @@ fn (mut app App) import_spec(spec ImportSpec) {
 	if name.starts_with('github') {
 		return
 	}
+	// Skip if already imported (avoid duplicates like os and os.user both importing os)
+	if name in app.imported_modules {
+		return
+	}
+	app.imported_modules[name] = true
 	app.gen('import ${name}')
 	if spec.name.name != '' {
 		app.gen(' as ${spec.name.name}')

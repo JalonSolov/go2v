@@ -7,7 +7,8 @@
 module main
 
 // Modules that don't exist in V at all and shouldn't be imported
-const nonexistent_modules = ['fmt', 'path', 'strings', 'atomic', 'unsafe', 'bytes']
+// Note: 'strings' and 'bytes' have special handling in import_spec
+const nonexistent_modules = ['fmt', 'path', 'atomic', 'unsafe']
 
 // Type names that conflict with V's standard library and need renaming
 // These types exist in V's stdlib (e.g., log.Log) and cause conflicts
@@ -17,7 +18,7 @@ const conflicting_type_names = {
 
 // Modules that need function call translation (includes nonexistent + some that exist but need mapping)
 const modules_needing_call_translation = ['fmt', 'path', 'strings', 'atomic', 'unsafe', 'os', 'bytes',
-	'user', 'sort', 'utf8']
+	'user', 'sort', 'utf8', 'bits', 'errors']
 
 // Maps Go strings function names to V string method names
 const go_strings_to_v = {
@@ -95,6 +96,12 @@ fn (mut app App) handle_nonexistent_module_call(sel SelectorExpr, mod_name strin
 		}
 		'utf8' {
 			app.handle_utf8_call(fn_name, node.args)
+		}
+		'bits' {
+			app.handle_bits_call(fn_name, node.args)
+		}
+		'errors' {
+			app.handle_errors_call(fn_name, node.args)
 		}
 		else {}
 	}
@@ -346,7 +353,15 @@ fn (mut app App) handle_user_call(fn_name string, args []Expr) {
 fn (mut app App) handle_sort_call(fn_name string, args []Expr) {
 	app.skip_call_parens = true
 	if args.len > 0 {
-		app.expr(args[0])
+		// If the argument is a pointer dereference (*foo), wrap in parentheses
+		// so we get (*foo).sort() instead of *foo.sort()
+		if args[0] is StarExpr {
+			app.gen('(')
+			app.expr(args[0])
+			app.gen(')')
+		} else {
+			app.expr(args[0])
+		}
 		app.gen('.sort()')
 	}
 }
@@ -376,6 +391,44 @@ fn (mut app App) handle_utf8_call(fn_name string, args []Expr) {
 			// For other utf8 functions, use utf8.xxx (V imports as encoding.utf8 but uses utf8 prefix)
 			app.gen('utf8.')
 			app.gen(app.go2v_ident(fn_name))
+		}
+	}
+}
+
+// handle_bits_call maps Go math/bits functions to V math.bits equivalents
+// Go: bits.RotateLeft64(x, k) => bits.rotate_left_64(x, k)
+// Note: In V, `import math.bits` means functions are called as `bits.xxx`
+fn (mut app App) handle_bits_call(fn_name string, args []Expr) {
+	// V uses snake_case with number separated: RotateLeft64 -> rotate_left_64
+	// First convert to snake_case, then add underscore before trailing numbers
+	mut v_fn_name := fn_name.camel_to_snake()
+	// Add underscore before trailing number (e.g., rotate_left64 -> rotate_left_64)
+	mut result := []u8{}
+	for i, c in v_fn_name {
+		if c.is_digit() && i > 0 && !v_fn_name[i - 1].is_digit() && v_fn_name[i - 1] != `_` {
+			result << `_`
+		}
+		result << c
+	}
+	app.gen('bits.')
+	app.gen(result.bytestr())
+}
+
+// handle_errors_call maps Go errors functions to V equivalents
+// errors.New(msg) => error(msg)
+fn (mut app App) handle_errors_call(fn_name string, args []Expr) {
+	app.skip_call_parens = true
+	match fn_name {
+		'New' {
+			app.gen('error(')
+			if args.len > 0 {
+				app.expr(args[0])
+			}
+			app.gen(')')
+		}
+		else {
+			// Fallback
+			app.gen('/* errors.${fn_name} */ error("")')
 		}
 	}
 }

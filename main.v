@@ -44,6 +44,10 @@ mut:
 	current_iota_value      int               // current iota value in const block (starts at 0)
 	in_const_block          bool              // true when processing a const block
 	last_const_expr         Expr              // last expression in const block (for iota pattern reuse)
+	call_arg_temp_vars      map[string]string // temp vars for module-qualified composite lits in call args
+	current_call_rhs_idx    int               // current RHS index being processed in assignment
+	in_unsafe_block         bool              // true when generating inside unsafe {} block
+	imported_modules        map[string]bool   // track already imported modules to avoid duplicates
 }
 
 fn (mut app App) genln(s string) {

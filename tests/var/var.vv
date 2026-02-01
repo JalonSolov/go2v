@@ -2,7 +2,7 @@ module main
 
 fn main() {
 	mut i := isize(42)
-	i = isize(24)
+	i = 24
 	mut j := isize(24)
-	j = isize(42)
+	j = 42
 }

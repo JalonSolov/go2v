@@ -144,6 +144,9 @@ fn (mut app App) go2v_ident(ident string) string {
 	}
 
 	if id == 'nil' {
+		if app.in_unsafe_block {
+			return 'nil'
+		}
 		return 'unsafe { nil }'
 	}
 

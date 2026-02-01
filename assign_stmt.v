@@ -89,6 +89,29 @@ fn (app App) expr_contains_ident(e Expr, name string) bool {
 }
 
 fn (mut app App) assign_stmt(assign AssignStmt, no_mut bool) {
+	// Pre-extract temp vars for module-qualified composite literals in RHS call expressions
+	// This must be done BEFORE generating the assignment to avoid breaking the syntax
+	// We track extracted args so call_expr can use the temp var instead of re-extracting
+	for rhs_expr in assign.rhs {
+		if rhs_expr is CallExpr {
+			// Check call arguments for module-qualified composite literals
+			for i, arg in rhs_expr.args {
+				if app.needs_temp_var(arg) {
+					temp_name := 'go2v_tmp_${app.temp_var_count}'
+					app.temp_var_count++
+					app.gen('${temp_name} := ')
+					app.expr(arg)
+					app.genln('')
+					// Track this for call_expr - use arg index as key
+					app.call_arg_temp_vars['${i}'] = temp_name
+				}
+			}
+		}
+	}
+	defer {
+		app.call_arg_temp_vars.clear()
+	}
+
 	// Check if we need unsafe block for pointer dereference on LHS
 	mut needs_unsafe := false
 	for lhs_expr in assign.lhs {
@@ -99,6 +122,7 @@ fn (mut app App) assign_stmt(assign AssignStmt, no_mut bool) {
 	}
 	if needs_unsafe {
 		app.gen('unsafe { ')
+		app.in_unsafe_block = true
 	}
 
 	// Special case for 'append()' => '<<' - check this first before generating LHS
@@ -106,6 +130,7 @@ fn (mut app App) assign_stmt(assign AssignStmt, no_mut bool) {
 	if app.check_and_handle_append_early(assign) {
 		if needs_unsafe {
 			app.gen(' }')
+			app.in_unsafe_block = false
 		}
 		return
 	}
@@ -163,6 +188,10 @@ fn (mut app App) assign_stmt(assign AssignStmt, no_mut bool) {
 	// This ensures that `x := x + 1` uses the outer x on RHS, not the new x
 	mut pending_mappings := map[string]string{}
 
+	// Collect LHS names to add to cur_fn_names AFTER RHS processing
+	// This prevents closures in RHS from incorrectly capturing LHS variables
+	mut lhs_names_to_add := []string{}
+
 	for l_idx, lhs_expr in assign.lhs {
 		if l_idx == 0 {
 			match lhs_expr {
@@ -201,7 +230,11 @@ fn (mut app App) assign_stmt(assign AssignStmt, no_mut bool) {
 				// Queue the mapping for later - don't apply yet
 				pending_mappings[go_name] = n
 			}
-			app.cur_fn_names[n] = true
+			// Don't add to cur_fn_names yet - wait until after RHS is processed
+			// This prevents closures from incorrectly capturing LHS variables
+			if n != '_' {
+				lhs_names_to_add << n
+			}
 			app.gen(n)
 		} else if lhs_expr is StarExpr {
 			// Can't use star_expr(), since it generates &
@@ -219,27 +252,34 @@ fn (mut app App) assign_stmt(assign AssignStmt, no_mut bool) {
 		app.gen(assign.tok)
 	}
 
+	// Check if this is a declaration (needs type casts) or reassignment (doesn't need them)
+	is_declaration := assign.tok == ':=' || convert_to_decl
+
 	for r_idx, rhs_expr in assign.rhs {
 		mut needs_close_paren := false
 		if r_idx > 0 {
 			app.gen(', ')
 		}
-		match rhs_expr {
-			BasicLit {
-				v_kind := rhs_expr.kind.to_lower()
-				if v_kind != 'int' && v_kind != 'string' {
-					app.gen('${go2v_type(v_kind)}(')
-					needs_close_paren = true
-				} else {
-					v_type := go2v_type(v_kind)
-					if v_type != v_kind {
-						app.gen(go2v_type(v_kind))
-						app.gen('(')
+		// Only add type casts for declarations, not reassignments
+		// For reassignments, the variable's type is already determined
+		if is_declaration {
+			match rhs_expr {
+				BasicLit {
+					v_kind := rhs_expr.kind.to_lower()
+					if v_kind != 'int' && v_kind != 'string' {
+						app.gen('${go2v_type(v_kind)}(')
 						needs_close_paren = true
+					} else {
+						v_type := go2v_type(v_kind)
+						if v_type != v_kind {
+							app.gen(go2v_type(v_kind))
+							app.gen('(')
+							needs_close_paren = true
+						}
 					}
 				}
+				else {}
 			}
-			else {}
 		}
 		app.expr(rhs_expr)
 		if needs_close_paren {
@@ -252,8 +292,15 @@ fn (mut app App) assign_stmt(assign AssignStmt, no_mut bool) {
 		app.name_mapping[go_name] = v_name
 	}
 
+	// Now register LHS names in cur_fn_names (after RHS processing)
+	// This ensures closures in RHS don't incorrectly capture LHS variables
+	for n in lhs_names_to_add {
+		app.cur_fn_names[n] = true
+	}
+
 	if needs_unsafe {
 		app.gen(' }')
+		app.in_unsafe_block = false
 	}
 	app.genln('')
 }

@@ -68,8 +68,52 @@ fn (mut app App) stmt(stmt Stmt) {
 
 fn (mut app App) block_stmt(body BlockStmt) {
 	app.genln('{')
-	// Named return params are handled by converting first assignment to declaration
-	// (see assign_stmt.v convert_to_decl logic)
+	// Initialize named return params at the start of the function body
+	// This is needed when the named return param is used before being assigned
+	// (e.g., `result = append(result, ...)` uses result on RHS)
+	if app.pending_named_returns {
+		for name, typ in app.named_return_types {
+			v_name := app.go2v_ident(name)
+			// For function array types, use explicit type annotation: mut x: []fn() = []
+			// because V parses []fn() as [] followed by fn() call
+			mut is_fn_array := false
+			match typ {
+				ArrayType {
+					if typ.elt is FuncType || typ.elt is ParenExpr {
+						is_fn_array = true
+					}
+				}
+				else {}
+			}
+			if is_fn_array {
+				// For function arrays, V can't parse []fn(){} correctly
+				// Use map[int]fn(){}.values() as workaround
+				arr := typ as ArrayType
+				app.gen('mut ${v_name} := map[int]')
+				app.force_upper = true
+				elt := arr.elt
+				match elt {
+					FuncType {
+						app.func_type(elt)
+					}
+					ParenExpr {
+						if elt.x is FuncType {
+							app.func_type(elt.x)
+						}
+					}
+					else {
+						app.expr(elt)
+					}
+				}
+				app.gen('{}.values()')
+			} else {
+				app.gen('mut ${v_name}:=')
+				app.gen_zero_value(typ)
+			}
+			app.genln('')
+			app.cur_fn_names[v_name] = true
+		}
+	}
 	app.pending_named_returns = false
 	app.stmt_list(body.list)
 	app.genln('}')
@@ -148,6 +192,11 @@ fn (mut app App) decl_stmt(d DeclStmt) {
 										type_name := sel.sel.name
 										// strings.Builder => strings.new_builder(0)
 										if mod == 'strings' && type_name == 'Builder' {
+											app.genln('strings.new_builder(0)')
+											continue
+										}
+										// bytes.Buffer => strings.new_builder(0) (V uses strings.Builder for both)
+										if mod == 'bytes' && type_name == 'Buffer' {
 											app.genln('strings.new_builder(0)')
 											continue
 										}
@@ -259,12 +308,36 @@ fn (mut app App) expr_stmt(stmt ExprStmt) {
 			app.gen('_ := ')
 		}
 	}
+	// Check if this is a method call that needs error handling in V
+	// (methods like write, write_string that return !int)
+	needs_error_handling := app.call_needs_error_handling(stmt.x)
 	// Mark that we're at statement level (safe to emit temp var declarations)
 	was_at_stmt_level := app.at_stmt_level
 	app.at_stmt_level = true
 	app.expr(stmt.x)
 	app.at_stmt_level = was_at_stmt_level
+	if needs_error_handling {
+		app.gen(' or { }')
+	}
 	app.genln('')
+}
+
+// Check if a call expression needs error handling when used as a statement
+// This handles methods that return error types in V but whose return values
+// are typically ignored in Go (like strings.Builder.Write)
+fn (app App) call_needs_error_handling(e Expr) bool {
+	if e is CallExpr {
+		fun := e.fun
+		if fun is SelectorExpr {
+			// Check for specific method names that need error handling
+			// Note: in V, strings.Builder.write() returns !int but write_string() doesn't
+			method_name := fun.sel.name
+			if method_name == 'Write' {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 fn (mut app App) for_stmt(f ForStmt) {

@@ -11,7 +11,13 @@ fn (mut app App) gen_zero_value(t Type) {
 		ArrayType {
 			app.force_upper = true
 			app.array_type(t)
-			app.gen('{}')
+			// For function arrays, don't add {} as V doesn't parse []fn(){} correctly
+			// Instead generate []fn() which V understands as an empty array literal
+			if t.elt is FuncType || t.elt is ParenExpr {
+				// Skip {} for function arrays
+			} else {
+				app.gen('{}')
+			}
 		}
 		Ident {
 			// Check if it's a basic type
@@ -23,9 +29,14 @@ fn (mut app App) gen_zero_value(t Type) {
 				'bool' {
 					app.gen('false')
 				}
-				'isize', 'i8', 'i16', 'i32', 'i64', 'usize', 'u8', 'u16', 'u32', 'u64', 'f32',
-				'f64', 'rune' {
+				'isize' {
+					// isize is V's default int type, no cast needed
 					app.gen('0')
+				}
+				'i8', 'i16', 'i32', 'i64', 'usize', 'u8', 'u16', 'u32', 'u64', 'f32', 'f64',
+				'rune' {
+					// Non-default numeric types need explicit cast
+					app.gen('${v_type}(0)')
 				}
 				else {
 					// Custom type - generate Type{}
@@ -37,11 +48,19 @@ fn (mut app App) gen_zero_value(t Type) {
 		}
 		StarExpr {
 			// Pointer type - nil
-			app.gen('unsafe { nil }')
+			if app.in_unsafe_block {
+				app.gen('nil')
+			} else {
+				app.gen('unsafe { nil }')
+			}
 		}
 		FuncType {
 			// Function type - nil
-			app.gen('unsafe { nil }')
+			if app.in_unsafe_block {
+				app.gen('nil')
+			} else {
+				app.gen('unsafe { nil }')
+			}
 		}
 		else {
 			app.gen('0')

@@ -14,8 +14,8 @@ pub mut:
 
 fn main() {
 	mut b := BB{}
-	b.bb = isize(2)
-	b.a = isize(3)
-	b.a.aa = isize(4)
+	b.bb = 2
+	b.a = 3
+	b.a.aa = 4
 	println(b.a)
 }

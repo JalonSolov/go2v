@@ -8,6 +8,6 @@ pub mut:
 fn main() {
 	mut ok := Ok{}
 	mut sum := isize(0)
-	sum += isize(1)
-	ok.a /= isize(2)
+	sum += 1
+	ok.a /= 2
 }

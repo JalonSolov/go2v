@@ -5,6 +5,9 @@ module main
 }
 */
 pub fn (a Abc) ok(d isize, b []Bcd, c rune) (isize, []Efg, rune) {
+	mut e := 0
+	mut f := []Efg{}
+	mut h := rune(0)
 }
 
 pub struct Abc {

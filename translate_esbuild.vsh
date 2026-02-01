@@ -57,8 +57,7 @@ fn collect_go_files_recursive(dir string) []string {
 			files << collect_go_files_recursive(full_path)
 		} else if entry.ends_with('.go') && !entry.ends_with('_test.go')
 			&& !entry.ends_with('_wasm.go') && !entry.ends_with('_unix.go')
-			&& !entry.ends_with('_other.go')
-			&& entry !in ['fs_zip.go', 'js_ident.go', 'unicode.go', 'xxhash.go'] {
+			&& !entry.ends_with('_other.go') && entry !in ['fs_zip.go', 'js_ident.go', 'unicode.go'] {
 			// Convert absolute path to relative
 			rel_path := full_path.replace(esbuild_src + '/', '')
 			files << rel_path
