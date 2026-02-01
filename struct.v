@@ -70,6 +70,11 @@ fn (mut app App) type_decl(spec TypeSpec) {
 	// Store alias info
 	app.struct_or_alias << name
 	app.struct_or_alias << v_name
+	// Track if this is an array type alias
+	if spec.typ is ArrayType {
+		app.array_type_aliases[name] = true
+		app.array_type_aliases[v_name] = true
+	}
 	// If this type will become an enum (detected by pre-scan), skip the type alias
 	if name in app.enum_types {
 		app.type_decl_name = name
@@ -362,6 +367,7 @@ fn (mut app App) struct_decl(struct_name string, spec StructType) {
 	app.genln('${pub_prefix}struct ${v_struct_name} {')
 
 	// First output embedded structs (fields without names)
+	mut has_pub_mut := false
 	for field in spec.fields.list {
 		if field.names.len == 0 {
 			// Embedded struct - skip if it's a pointer type (V doesn't support embedded pointers)
@@ -375,7 +381,10 @@ fn (mut app App) struct_decl(struct_name string, spec StructType) {
 				conversion := go2v_type_checked(ident.name)
 				if conversion.is_basic {
 					// Primitive type - generate as a named field
-					app.genln('pub mut:')
+					if !has_pub_mut {
+						app.genln('pub mut:')
+						has_pub_mut = true
+					}
 					app.genln('\t${ident.name.camel_to_snake()} ${conversion.v_type}')
 					continue
 				}
@@ -396,7 +405,7 @@ fn (mut app App) struct_decl(struct_name string, spec StructType) {
 			break
 		}
 	}
-	if has_named_fields {
+	if has_named_fields && !has_pub_mut {
 		app.genln('pub mut:')
 	}
 	for field in spec.fields.list {
@@ -466,7 +475,20 @@ fn (mut app App) composite_lit(c CompositeLit) {
 			app.composite_lit(c)
 		}
 		Ident {
-			app.struct_init(c)
+			// Check if this is an array type alias
+			if c.typ.name in app.array_type_aliases {
+				// Generate array literal: [elem1, elem2, ...]
+				app.gen('[')
+				for i, elt in c.elts {
+					if i > 0 {
+						app.gen(', ')
+					}
+					app.expr(elt)
+				}
+				app.gen(']')
+			} else {
+				app.struct_init(c)
+			}
 		}
 		InvalidExpr {
 			if c.elts.len > 0 {

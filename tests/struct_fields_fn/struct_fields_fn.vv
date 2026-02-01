@@ -3,7 +3,7 @@ module main
 pub struct Ok {
 pub mut:
 	aaa string
-	bbb fn ()         = unsafe { nil }
-	ccc fn (_ isize)  = unsafe { nil }
-	ddd fn (_ Ok) u16 = unsafe { nil }
+	bbb fn ()       = unsafe { nil }
+	ccc fn (isize)  = unsafe { nil }
+	ddd fn (Ok) u16 = unsafe { nil }
 }

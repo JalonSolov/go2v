@@ -36,6 +36,7 @@ mut:
 	pending_structs         []string          // inline struct definitions to output
 	enum_types              map[string]bool   // types that will become enums (detected by pre-scan)
 	enum_values             map[string]bool   // enum constant values (for adding . prefix in match)
+	array_type_aliases      map[string]bool   // type aliases to array types (for correct composite lit handling)
 	fmt_needs_closing_paren bool              // for wrapping printf in print(strconv.v_sprintf(...))
 	at_stmt_level           bool              // true when we can safely emit temp var declarations
 	error_vars              map[string]bool   // variables that hold error/option types (for nil -> none translation)

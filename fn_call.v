@@ -95,7 +95,10 @@ fn (mut app App) call_expr(call CallExpr) {
 		} else if fun.name == 'new' {
 			// new(Foo) => &Foo{}
 			app.gen('&')
+			saved_force_upper := app.force_upper
+			app.force_upper = true
 			app.expr(call.args[0])
+			app.force_upper = saved_force_upper
 			app.gen('{}')
 			return
 		} else if fun.name == 'delete' {
