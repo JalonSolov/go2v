@@ -10,27 +10,39 @@ import v.util.diff
 
 struct App {
 mut:
-	sb                  strings.Builder
-	is_fn_call          bool // for lowercase idents
-	tests_ok            bool = true
-	skip_first_arg      bool // for `strings.Replace(s...)` => `s.replace(...)`
-	skip_call_parens    bool // skip generating () and args for fully-handled calls
-	force_upper         bool // for `field Type` in struct decl, `mod.UpperCase` types etc
-	no_star             bool // To skip & in StarExpr in type matches  (interfaces)
-	type_decl_name      string
-	is_enum_decl        bool
-	is_mut_recv         bool              // so that `mut f Foo` is generated instead of `mut f &Foo`
-	in_go_stmt          bool              // inside a go statement (don't convert IIFE to block)
-	in_defer_block      bool              // inside a defer block (return not allowed)
-	cur_fn_names        map[string]bool   // for fixing shadowing
-	name_mapping        map[string]string // Go name to V name mapping for renamed variables
-	running_test        bool              // disables shadowing for now
-	struct_or_alias     []string          // skip camel_to_snake for these, but force capitalize
-	named_return_params map[string]bool   // for named return parameters like `func foo() (im int)`
-	global_names        map[string]bool   // track all global names (functions, structs, etc.) to avoid collisions
-	inline_struct_count int               // counter for generating unique inline struct names
-	pending_structs     []string          // inline struct definitions to output
-	enum_types          map[string]bool   // types that will become enums (detected by pre-scan)
+	sb                      strings.Builder
+	is_fn_call              bool // for lowercase idents
+	tests_ok                bool = true
+	skip_first_arg          bool // for `strings.Replace(s...)` => `s.replace(...)`
+	skip_call_parens        bool // skip generating () and args for fully-handled calls
+	force_upper             bool // for `field Type` in struct decl, `mod.UpperCase` types etc
+	no_star                 bool // To skip & in StarExpr in type matches  (interfaces)
+	type_decl_name          string
+	is_enum_decl            bool
+	is_mut_recv             bool              // so that `mut f Foo` is generated instead of `mut f &Foo`
+	in_go_stmt              bool              // inside a go statement (don't convert IIFE to block)
+	in_defer_block          bool              // inside a defer block (return not allowed)
+	in_interface_decl       bool              // inside an interface declaration (skip fn prefix)
+	cur_fn_names            map[string]bool   // for fixing shadowing
+	name_mapping            map[string]string // Go name to V name mapping for renamed variables
+	running_test            bool              // disables shadowing for now
+	struct_or_alias         []string          // skip camel_to_snake for these, but force capitalize
+	named_return_params     map[string]bool   // for named return parameters like `func foo() (im int)`
+	named_return_types      map[string]Type   // types for named return parameters
+	pending_named_returns   bool              // true when entering function body, need to declare named returns
+	global_names            map[string]bool   // track all global names (functions, structs, etc.) to avoid collisions
+	inline_struct_count     int               // counter for generating unique inline struct names
+	temp_var_count          int               // counter for generating unique temp variable names
+	pending_structs         []string          // inline struct definitions to output
+	enum_types              map[string]bool   // types that will become enums (detected by pre-scan)
+	enum_values             map[string]bool   // enum constant values (for adding . prefix in match)
+	fmt_needs_closing_paren bool              // for wrapping printf in print(strconv.v_sprintf(...))
+	at_stmt_level           bool              // true when we can safely emit temp var declarations
+	error_vars              map[string]bool   // variables that hold error/option types (for nil -> none translation)
+	first_arg_needs_mut     bool              // for binary.PutUint* functions where first arg needs mut
+	current_iota_value      int               // current iota value in const block (starts at 0)
+	in_const_block          bool              // true when processing a const block
+	last_const_expr         Expr              // last expression in const block (for iota pattern reuse)
 }
 
 fn (mut app App) genln(s string) {
@@ -67,21 +79,35 @@ fn (mut app App) generate_v_code(go_file GoFile) string {
 }
 
 // scan_for_enum_types pre-scans declarations to identify types that will become enums
-// This allows type_decl to skip generating type aliases for these types
+// and their values. This allows type_decl to skip generating type aliases for these types
+// and allows enum values to be prefixed with . when used in switch/match expressions
 fn (mut app App) scan_for_enum_types(decls []Decls) {
 	for decl in decls {
 		if decl is GenDecl {
 			if decl.tok == 'const' {
+				// Track if we're in an enum block
+				mut in_enum_block := false
 				for spec in decl.specs {
 					if spec is ValueSpec {
-						// Check if this const uses iota
-						for val in spec.values {
-							if app.contains_iota(val) {
-								// This is an enum - record the type name
-								if spec.typ.node_type == 'Ident' && spec.typ.name != '' {
-									app.enum_types[spec.typ.name] = true
+						// Check if this const starts an enum (uses iota but not bitflag)
+						if spec.values.len > 0 {
+							first_val := spec.values[0]
+							if app.contains_iota(first_val) && !app.is_bitflag_pattern(first_val) {
+								in_enum_block = true
+								// Record the type name
+								if spec.typ is Ident {
+									ident := spec.typ as Ident
+									if ident.name != '' {
+										app.enum_types[ident.name] = true
+									}
 								}
-								break
+							}
+						}
+						// If we're in an enum block, track all const names as enum values
+						if in_enum_block {
+							for name in spec.names {
+								v_name := app.go2v_ident(name.name)
+								app.enum_values[v_name] = true
 							}
 						}
 					}
@@ -198,10 +224,13 @@ fn (mut app App) translate_file(go_file_path string) {
 	v_path := go_file_path.substr_ni(0, -3) + '.v'
 	os.write_file(v_path, generated_v_code) or { panic(err) }
 	println('${v_path} has been successfully generated')
-	res := os.system('v -translated-go fmt -w ${v_path}')
-	if res != 0 {
-		exit(1)
-	}
+	// Note: Skipping vfmt to preserve space before { in module-qualified struct literals
+	// This works around a V parser issue where api.Type{ inside function args fails
+	// but api.Type { (with space) works. Unfortunately vfmt removes the space.
+	// res := os.system('v -translated-go fmt -w ${v_path}')
+	// if res != 0 {
+	// 	exit(1)
+	// }
 }
 
 fn (mut app App) run_test(subdir string, test_name string) ! {

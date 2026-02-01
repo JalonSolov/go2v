@@ -89,14 +89,49 @@ fn (app App) expr_contains_ident(e Expr, name string) bool {
 }
 
 fn (mut app App) assign_stmt(assign AssignStmt, no_mut bool) {
+	// Check if we need unsafe block for pointer dereference on LHS
+	mut needs_unsafe := false
+	for lhs_expr in assign.lhs {
+		if lhs_expr is StarExpr {
+			needs_unsafe = true
+			break
+		}
+	}
+	if needs_unsafe {
+		app.gen('unsafe { ')
+	}
+
 	// Special case for 'append()' => '<<' - check this first before generating LHS
 	// because we don't want to add 'mut' for append operations
 	if app.check_and_handle_append_early(assign) {
+		if needs_unsafe {
+			app.gen(' }')
+		}
 		return
 	}
 
 	// Special case for type assertion with comma-ok pattern: val, ok := x.(Type)
 	if app.check_and_handle_type_assertion(assign) {
+		return
+	}
+
+	// Special case for os.LookupEnv: value, ok := os.LookupEnv("X") => Go's (string, bool) to V's ?string
+	if app.check_and_handle_lookup_env(assign) {
+		return
+	}
+
+	// Special case for map lookup with comma-ok pattern: value, ok := myMap[key]
+	if app.check_and_handle_map_lookup_ok(assign) {
+		return
+	}
+
+	// Special case for channel receive with comma-ok pattern: value, ok := <-ch
+	if app.check_and_handle_chan_recv_ok(assign) {
+		return
+	}
+
+	// Special case for functions that return (value, error) like strconv.Atoi
+	if app.check_and_handle_result_pattern(assign) {
 		return
 	}
 
@@ -217,6 +252,9 @@ fn (mut app App) assign_stmt(assign AssignStmt, no_mut bool) {
 		app.name_mapping[go_name] = v_name
 	}
 
+	if needs_unsafe {
+		app.gen(' }')
+	}
 	app.genln('')
 }
 
@@ -331,6 +369,81 @@ fn (mut app App) gen_append(args []Expr, assign_tok string) {
 	app.genln('')
 }
 
+// Check and handle os.LookupEnv pattern: value, ok := os.LookupEnv("X")
+// Go's LookupEnv returns (string, bool), but V's getenv_opt returns ?string
+fn (mut app App) check_and_handle_lookup_env(assign AssignStmt) bool {
+	// Only handle when there are exactly 2 LHS values and 1 RHS value
+	if assign.lhs.len != 2 || assign.rhs.len != 1 {
+		return false
+	}
+	// Check if RHS is a call to os.LookupEnv
+	if assign.rhs[0] !is CallExpr {
+		return false
+	}
+	call := assign.rhs[0] as CallExpr
+	if call.fun !is SelectorExpr {
+		return false
+	}
+	sel := call.fun as SelectorExpr
+	if sel.x !is Ident {
+		return false
+	}
+	mod_name := (sel.x as Ident).name
+	fn_name := sel.sel.name
+	if mod_name != 'os' || fn_name != 'LookupEnv' {
+		return false
+	}
+
+	// Get the ok variable name (second LHS)
+	mut ok_name := '_'
+	if assign.lhs[1] is Ident {
+		go_ok_name := (assign.lhs[1] as Ident).name
+		ok_name = app.go2v_ident(go_ok_name)
+		if ok_name != '_' {
+			if ok_name in app.cur_fn_names {
+				ok_name = app.unique_name_anti_shadow(ok_name, true)
+				app.name_mapping[go_ok_name] = ok_name
+			}
+			app.cur_fn_names[ok_name] = true
+		}
+	}
+
+	// Get the val variable name (first LHS)
+	mut val_name := '_'
+	if assign.lhs[0] is Ident {
+		go_val_name := (assign.lhs[0] as Ident).name
+		val_name = app.go2v_ident(go_val_name)
+		if val_name != '_' {
+			if val_name in app.cur_fn_names {
+				val_name = app.unique_name_anti_shadow(val_name, true)
+				app.name_mapping[go_val_name] = val_name
+			}
+			app.cur_fn_names[val_name] = true
+		}
+	}
+
+	// Generate V code for getenv_opt
+	// First, get the option value
+	tmp_name := if val_name != '_' { val_name + '_opt' } else { 'env_opt_tmp' }
+	app.gen('${tmp_name} := os.getenv_opt(')
+	if call.args.len > 0 {
+		app.expr(call.args[0])
+	}
+	app.genln(')')
+
+	// Generate the ok check
+	if ok_name != '_' {
+		app.genln('${ok_name} := ${tmp_name} != none')
+	}
+
+	// Generate the value extraction if needed
+	if val_name != '_' {
+		app.genln("${val_name} := ${tmp_name} or { '' }")
+	}
+
+	return true
+}
+
 // Check and handle type assertion with comma-ok pattern: val, ok := x.(Type)
 fn (mut app App) check_and_handle_type_assertion(assign AssignStmt) bool {
 	// Only handle when there are exactly 2 LHS values and 1 RHS value
@@ -389,6 +502,232 @@ fn (mut app App) check_and_handle_type_assertion(assign AssignStmt) bool {
 		app.gen(' as ')
 		app.typ(ta.typ)
 		app.genln('')
+	}
+
+	return true
+}
+
+// Check and handle map lookup with comma-ok pattern: value, ok := myMap[key]
+// Go: value, ok := m[key] => V: ok := key in m; value := m[key]
+fn (mut app App) check_and_handle_map_lookup_ok(assign AssignStmt) bool {
+	// Only handle when there are exactly 2 LHS values and 1 RHS value
+	if assign.lhs.len != 2 || assign.rhs.len != 1 {
+		return false
+	}
+	// Check if RHS is an IndexExpr (map lookup)
+	if assign.rhs[0] !is IndexExpr {
+		return false
+	}
+	idx := assign.rhs[0] as IndexExpr
+
+	// Get the ok variable name (second LHS)
+	mut ok_name := '_'
+	if assign.lhs[1] is Ident {
+		go_ok_name := (assign.lhs[1] as Ident).name
+		ok_name = app.go2v_ident(go_ok_name)
+		if ok_name != '_' {
+			if ok_name in app.cur_fn_names {
+				ok_name = app.unique_name_anti_shadow(ok_name, true)
+				app.name_mapping[go_ok_name] = ok_name
+			}
+			app.cur_fn_names[ok_name] = true
+		}
+	}
+
+	// Get the val variable name (first LHS)
+	mut val_name := '_'
+	if assign.lhs[0] is Ident {
+		go_val_name := (assign.lhs[0] as Ident).name
+		val_name = app.go2v_ident(go_val_name)
+		if val_name != '_' {
+			if val_name in app.cur_fn_names {
+				val_name = app.unique_name_anti_shadow(val_name, true)
+				app.name_mapping[go_val_name] = val_name
+			}
+			app.cur_fn_names[val_name] = true
+		}
+	}
+
+	// Generate the 'in' check for the ok variable
+	if ok_name != '_' {
+		app.gen('${ok_name} := ')
+		app.expr(idx.index)
+		app.gen(' in ')
+		app.expr(idx.x)
+		app.genln('')
+	}
+
+	// Generate the value extraction if needed
+	if val_name != '_' {
+		app.gen('${val_name} := ')
+		app.expr(idx.x)
+		app.gen('[')
+		app.expr(idx.index)
+		app.genln(']')
+	}
+
+	return true
+}
+
+// Check and handle channel receive with comma-ok pattern: value, ok := <-ch
+// Go: value, ok := <-ch => V: value_opt := <-ch; ok := value_opt != none; value := value_opt or { default }
+fn (mut app App) check_and_handle_chan_recv_ok(assign AssignStmt) bool {
+	// Only handle when there are exactly 2 LHS values and 1 RHS value
+	if assign.lhs.len != 2 || assign.rhs.len != 1 {
+		return false
+	}
+	// Check if RHS is a UnaryExpr with <- operator (channel receive)
+	if assign.rhs[0] !is UnaryExpr {
+		return false
+	}
+	u := assign.rhs[0] as UnaryExpr
+	if u.op != '<-' {
+		return false
+	}
+
+	// Get the ok variable name (second LHS)
+	mut ok_name := '_'
+	if assign.lhs[1] is Ident {
+		go_ok_name := (assign.lhs[1] as Ident).name
+		ok_name = app.go2v_ident(go_ok_name)
+		if ok_name != '_' {
+			if ok_name in app.cur_fn_names {
+				ok_name = app.unique_name_anti_shadow(ok_name, true)
+				app.name_mapping[go_ok_name] = ok_name
+			}
+			app.cur_fn_names[ok_name] = true
+		}
+	}
+
+	// Get the val variable name (first LHS)
+	mut val_name := '_'
+	if assign.lhs[0] is Ident {
+		go_val_name := (assign.lhs[0] as Ident).name
+		val_name = app.go2v_ident(go_val_name)
+		if val_name != '_' {
+			if val_name in app.cur_fn_names {
+				val_name = app.unique_name_anti_shadow(val_name, true)
+				app.name_mapping[go_val_name] = val_name
+			}
+			app.cur_fn_names[val_name] = true
+		}
+	}
+
+	// Generate the channel receive to a temporary option variable
+	tmp_name := if val_name != '_' { val_name + '_opt' } else { 'chan_opt_tmp' }
+	app.gen('${tmp_name} := <-')
+	app.expr(u.x)
+	app.genln('')
+
+	// Generate the ok check
+	if ok_name != '_' {
+		app.genln('${ok_name} := ${tmp_name} != none')
+	}
+
+	// Generate the value extraction if needed (with default value of 0)
+	if val_name != '_' {
+		app.genln('${val_name} := ${tmp_name} or { 0 }')
+	}
+
+	return true
+}
+
+// Functions that return (value, error) in Go and need Result handling in V
+const result_returning_funcs = {
+	'strconv.Atoi':       true
+	'strconv.ParseInt':   true
+	'strconv.ParseUint':  true
+	'strconv.ParseFloat': true
+	'strconv.ParseBool':  true
+}
+
+// Check and handle functions that return (value, error) like strconv.Atoi
+// Go: value, err := strconv.Atoi("123") => V: value := strconv.atoi('123') or { 0 }; err_ok := true/false
+fn (mut app App) check_and_handle_result_pattern(assign AssignStmt) bool {
+	// Only handle when there are exactly 2 LHS values and 1 RHS value
+	if assign.lhs.len != 2 || assign.rhs.len != 1 {
+		return false
+	}
+	// Check if RHS is a CallExpr
+	if assign.rhs[0] !is CallExpr {
+		return false
+	}
+	call := assign.rhs[0] as CallExpr
+	if call.fun !is SelectorExpr {
+		return false
+	}
+	sel := call.fun as SelectorExpr
+	if sel.x !is Ident {
+		return false
+	}
+
+	// Get the module and function name
+	mod_name := (sel.x as Ident).name
+	fn_name := sel.sel.name
+	full_name := '${mod_name}.${fn_name}'
+
+	// Check if this is a known result-returning function
+	if full_name !in result_returning_funcs {
+		return false
+	}
+
+	// Get the err variable name (second LHS)
+	mut err_name := '_'
+	if assign.lhs[1] is Ident {
+		go_err_name := (assign.lhs[1] as Ident).name
+		err_name = app.go2v_ident(go_err_name)
+		if err_name != '_' {
+			if err_name in app.cur_fn_names {
+				err_name = app.unique_name_anti_shadow(err_name, true)
+				app.name_mapping[go_err_name] = err_name
+			}
+			app.cur_fn_names[err_name] = true
+		}
+	}
+
+	// Get the val variable name (first LHS)
+	mut val_name := '_'
+	if assign.lhs[0] is Ident {
+		go_val_name := (assign.lhs[0] as Ident).name
+		val_name = app.go2v_ident(go_val_name)
+		if val_name != '_' {
+			if val_name in app.cur_fn_names {
+				val_name = app.unique_name_anti_shadow(val_name, true)
+				app.name_mapping[go_val_name] = val_name
+			}
+			app.cur_fn_names[val_name] = true
+		}
+	}
+
+	// Generate the value with error handling using 'or' block
+	// First, create a temporary to track success/failure
+	err_ok_name := if err_name != '_' { err_name + '_ok' } else { '' }
+	if err_ok_name != '' {
+		app.genln('mut ${err_ok_name} := true')
+	}
+
+	if val_name != '_' {
+		app.gen('${val_name} := ${mod_name}.${app.go2v_ident(fn_name)}(')
+		for i, arg in call.args {
+			if i > 0 {
+				app.gen(', ')
+			}
+			app.expr(arg)
+		}
+		if err_ok_name != '' {
+			app.genln(') or { ${err_ok_name} = false; 0 }')
+		} else {
+			app.genln(') or { 0 }')
+		}
+	}
+
+	// If err variable is used, map it to a boolean for nil checks
+	// Go's 'if err == nil' becomes 'if err == none' in V
+	if err_name != '_' {
+		// Create a none-able error value that's none when successful
+		app.genln('${err_name} := if ${err_ok_name} { none } else { error("conversion failed") }')
+		// Track this as an error variable so nil comparisons use 'none'
+		app.error_vars[err_name] = true
 	}
 
 	return true

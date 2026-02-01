@@ -2,7 +2,7 @@ module main
 
 import crypto.aes
 
-struct BinTree {
+pub struct BinTree {
 pub mut:
 	value string
 	left  &BinTree = unsafe { nil }

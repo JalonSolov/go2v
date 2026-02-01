@@ -1,10 +1,10 @@
 module main
 
 fn main() {
-	go fn () {
+	spawn fn () {
 		println('Hello World')
 	}()
-	go func_a()
+	spawn func_a()
 }
 
 fn func_a() {

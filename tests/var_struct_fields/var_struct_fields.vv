@@ -1,6 +1,6 @@
 module main
 
-struct Ok {
+pub struct Ok {
 pub mut:
 	a isize
 	b string

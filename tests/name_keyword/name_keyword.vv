@@ -8,7 +8,7 @@ fn match_() {
 	println('hey')
 }
 
-struct Foo {
+pub struct Foo {
 pub mut:
 	match_ bool
 }

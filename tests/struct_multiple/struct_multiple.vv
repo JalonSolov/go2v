@@ -1,11 +1,11 @@
 module main
 
-struct Struct1 {
+pub struct Struct1 {
 pub mut:
 	a isize
 }
 
-struct Struct2 {
+pub struct Struct2 {
 pub mut:
 	b isize
 }

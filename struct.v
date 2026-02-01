@@ -3,6 +3,12 @@
 
 fn (mut app App) gen_decl(decl GenDecl) {
 	app.comments(decl.doc)
+	// Reset iota value at the start of a const block
+	if decl.tok == 'const' {
+		app.current_iota_value = 0
+		app.in_const_block = true
+		app.last_const_expr = InvalidExpr{}
+	}
 	for spec in decl.specs {
 		match spec {
 			ImportSpec {
@@ -14,7 +20,12 @@ fn (mut app App) gen_decl(decl GenDecl) {
 						app.interface_decl(spec.name.name, spec.typ)
 					}
 					StructType {
+						// Add both original and capitalized names to struct_or_alias
+						// so go2v_ident can recognize them and capitalize properly
 						app.struct_or_alias << spec.name.name
+						if !spec.name.name[0].is_capital() {
+							app.struct_or_alias << spec.name.name.capitalize()
+						}
 						app.struct_decl(spec.name.name, spec.typ)
 					}
 					else {
@@ -23,9 +34,7 @@ fn (mut app App) gen_decl(decl GenDecl) {
 				}
 			}
 			ValueSpec {
-				if spec.typ.node_type == 'Ident' {
-					// needs_closer = true
-				}
+				// Note: spec.typ is Type sumtype now
 				match decl.tok {
 					'var' {
 						// app.genln('// ValueSpec global')
@@ -34,11 +43,14 @@ fn (mut app App) gen_decl(decl GenDecl) {
 					else {
 						// app.genln('// VA const')
 						app.const_decl(spec)
+						// Increment iota for next const in block
+						app.current_iota_value++
 					}
 				}
 			}
 		}
 	}
+	app.in_const_block = false
 	// if needs_closer {
 	if app.is_enum_decl {
 		app.genln('}')
@@ -67,24 +79,65 @@ fn (mut app App) type_decl(spec TypeSpec) {
 
 fn (mut app App) global_decl(spec ValueSpec) {
 	for name in spec.names {
-		app.gen('__global ${name.name}')
-		match spec.typ.node_type {
-			'Ident' {
-				app.gen(' ')
-				app.genln(go2v_type(spec.typ.name))
-			}
-			'SelectorExpr', 'StarExpr', 'ArrayType', 'MapType', 'FuncType' {
-				// For complex types, use the name as-is since we only have node_type info
-				// This results in a type placeholder that needs manual fixing
-				app.gen(' ')
-				if spec.typ.name != '' {
-					app.genln(spec.typ.name)
-				} else {
-					// No name available, output a placeholder
-					app.genln('voidptr // TODO: complex type')
+		// V globals must be snake_case (no uppercase letters allowed)
+		v_name := name.name.camel_to_snake()
+
+		// Handle anonymous struct types - generate struct definition first
+		if spec.typ is StructType {
+			struct_name := '${v_name.capitalize()}_Type'
+			// Generate the struct definition
+			app.genln('pub struct ${struct_name} {')
+			app.genln('pub mut:')
+			st := spec.typ as StructType
+			for field in st.fields.list {
+				for n in field.names {
+					app.gen('\t')
+					app.gen(app.go2v_ident(n.name.camel_to_snake()))
+					app.gen(' ')
+					app.typ(field.typ)
+					app.genln('')
 				}
 			}
-			'InvalidExpr' {
+			app.genln('}')
+			// Now generate the global with the struct type
+			app.genln('__global ${v_name} ${struct_name}')
+			continue
+		}
+
+		app.gen('__global ${v_name}')
+		match spec.typ {
+			Ident {
+				app.gen(' ')
+				ident := spec.typ as Ident
+				app.genln(go2v_type(ident.name))
+			}
+			SelectorExpr {
+				app.gen(' ')
+				app.force_upper = true
+				app.selector_expr(spec.typ)
+				app.genln('')
+			}
+			StarExpr {
+				app.gen(' ')
+				app.typ(spec.typ)
+				app.genln(' = unsafe { nil }')
+			}
+			ArrayType {
+				app.gen(' ')
+				app.typ(spec.typ)
+				app.genln('')
+			}
+			MapType {
+				app.gen(' ')
+				app.typ(spec.typ)
+				app.genln('')
+			}
+			FuncType {
+				app.gen(' ')
+				app.typ(spec.typ)
+				app.genln(' = unsafe { nil }')
+			}
+			InvalidExpr {
 				app.gen(' = ')
 				if spec.values.len > 0 {
 					app.expr(spec.values[0])
@@ -97,9 +150,6 @@ fn (mut app App) global_decl(spec ValueSpec) {
 					app.gen(' = ')
 					app.expr(spec.values[0])
 					app.genln('')
-				} else if spec.typ.name != '' {
-					app.gen(' ')
-					app.genln(spec.typ.name)
 				} else {
 					app.genln(' voidptr // TODO: unknown type')
 				}
@@ -111,21 +161,32 @@ fn (mut app App) global_decl(spec ValueSpec) {
 fn (mut app App) const_decl(spec ValueSpec) {
 	// Handle iota (V enum) - check if this const block uses iota
 	// Only start a new enum if we're not already in one
+	// Don't generate enum for bitflag patterns (1 << iota)
 	if !app.is_enum_decl && spec.values.len > 0 {
 		first_val := spec.values[0]
-		if app.contains_iota(first_val) {
+		if app.contains_iota(first_val) && !app.is_bitflag_pattern(first_val) {
 			app.is_enum_decl = true
 			// Use the type from the spec if available (for cases like `const X SomeType = iota`)
 			// Otherwise fall back to type_decl_name or generate from first const name
-			mut enum_name := if spec.typ.node_type == 'Ident' && spec.typ.name != '' {
-				spec.typ.name
-			} else if app.type_decl_name != '' {
-				app.type_decl_name
-			} else if spec.names.len > 0 {
-				// Generate synthetic enum name from first const name
-				spec.names[0].name.capitalize() + 'Enum'
+			mut enum_name := if spec.typ is Ident {
+				ident := spec.typ as Ident
+				if ident.name != '' {
+					ident.name
+				} else {
+					''
+				}
 			} else {
-				'UnnamedEnum'
+				''
+			}
+			if enum_name == '' {
+				enum_name = if app.type_decl_name != '' {
+					app.type_decl_name
+				} else if spec.names.len > 0 {
+					// Generate synthetic enum name from first const name
+					spec.names[0].name.capitalize() + 'Enum'
+				} else {
+					'UnnamedEnum'
+				}
 			}
 			// Single letter names need to be doubled (V requires > 1 char)
 			if enum_name.len == 1 {
@@ -140,6 +201,8 @@ fn (mut app App) const_decl(spec ValueSpec) {
 		}
 		n := app.go2v_ident(name.name)
 		if app.is_enum_decl {
+			// Track this enum value for later use in match expressions
+			app.enum_values[n] = true
 			// Handle enum values - check if there's an explicit value
 			if i < spec.values.len {
 				val := spec.values[i]
@@ -161,7 +224,11 @@ fn (mut app App) const_decl(spec ValueSpec) {
 		} else {
 			app.gen('const ${n} = ')
 			if i < spec.values.len {
+				app.last_const_expr = spec.values[i]
 				app.expr(spec.values[i])
+			} else if app.last_const_expr !is InvalidExpr {
+				// Reuse last expression for iota patterns without explicit value
+				app.expr(app.last_const_expr)
 			}
 			app.genln('')
 		}
@@ -169,7 +236,7 @@ fn (mut app App) const_decl(spec ValueSpec) {
 }
 
 // TODO hardcoded esbuild paths
-const master_module_paths = ['github.com.evanw.esbuild.internal', 'github.com.evanw.esbuild.pkg']
+const master_module_paths = ['github.com.evanw.esbuild']
 
 fn (mut app App) import_spec(spec ImportSpec) {
 	mut name := spec.path.value.replace('"', '').replace('/', '.')
@@ -182,25 +249,53 @@ fn (mut app App) import_spec(spec ImportSpec) {
 		return
 	}
 	// Skip modules that don't have V equivalents
-	if name in ['bufio', 'mime.multipart', 'os.user', 'sync.atomic'] {
+	if name in ['bufio', 'mime.multipart', 'sync.atomic', 'runtime.debug', 'runtime.pprof',
+		'runtime.trace', 'bytes', 'sort', 'runtime', 'syscall', 'errors', 'archive.zip', 'unicode'] {
+		return
+	}
+	// Go's os/user package maps to V's os module
+	if name == 'os.user' {
+		app.genln('import os')
 		return
 	}
 	// Go to V module mappings
 	match name {
-		'archive.zip' { name = 'compress.zip' }
-		'compress.flate' { name = 'compress.deflate' }
-		'container.list' { name = 'datatypes' }
-		'io.ioutil' { name = 'io.util' }
-		'mime' { name = 'net.http.mime' }
-		'unicode.utf8' { name = 'encoding.utf8' }
-		'net.http.cookiejar' { name = 'net.http' }
+		'compress.flate' {
+			name = 'compress.deflate'
+		}
+		'container.list' {
+			name = 'datatypes'
+		}
+		'io.ioutil' {
+			name = 'io.util'
+		}
+		'math.rand' {
+			name = 'rand'
+		}
+		'mime' {
+			name = 'net.http.mime'
+		}
+		'net.url' {
+			// Use alias to maintain 'url' usage in code
+			app.genln('import net.urllib as url')
+			return
+		}
+		'unicode.utf8' {
+			name = 'encoding.utf8'
+		}
+		'net.http.cookiejar' {
+			name = 'net.http'
+		}
 		else {}
 	}
 	// Check if it's a local module (internal or pkg)
 	for master_module_path in master_module_paths {
 		if name.starts_with(master_module_path) {
-			n := name.replace(master_module_path, '')
-			app.gen('import ${n[1..]}')
+			mut n := name.replace(master_module_path, '')[1..] // Remove leading dot
+			// Flatten the module structure - remove internal/ and pkg/ prefixes
+			// This avoids V module resolution issues with nested directories
+			n = n.replace('internal.', '').replace('pkg.', '')
+			app.gen('import ${n}')
 			if spec.name.name != '' {
 				app.gen(' as ${spec.name.name}')
 			}
@@ -211,6 +306,10 @@ fn (mut app App) import_spec(spec ImportSpec) {
 	// Handle golang.org/x/ imports by stripping the prefix
 	if name.starts_with('golang.org.x.') {
 		n := name.replace('golang.org.x.', '')
+		// Skip golang.org/x/ modules that don't exist in V
+		if n.starts_with('sys') {
+			return
+		}
 		app.gen('import ${n}')
 		if spec.name.name != '' {
 			app.gen(' as ${spec.name.name}')
@@ -230,10 +329,15 @@ fn (mut app App) import_spec(spec ImportSpec) {
 }
 
 fn (mut app App) struct_decl(struct_name string, spec StructType) {
-	// Convert struct name - single letter names need to be doubled (V requires > 1 char)
-	mut v_struct_name := struct_name
+	// Convert struct name - V requires struct names to start with capital letter
+	// and single letter names need to be doubled (V requires > 1 char)
+	mut v_struct_name := struct_name.capitalize()
 	if struct_name.len == 1 {
 		v_struct_name = struct_name.capitalize() + struct_name.capitalize()
+	}
+	// Check for type name conflicts with V's standard library
+	if renamed := conflicting_type_names[v_struct_name] {
+		v_struct_name = renamed
 	}
 	// Check for name collision with existing global names
 	if v_struct_name in app.global_names {
@@ -249,7 +353,9 @@ fn (mut app App) struct_decl(struct_name string, spec StructType) {
 	}
 	// Track struct name globally
 	app.global_names[v_struct_name] = true
-	app.genln('struct ${v_struct_name} {')
+	// In Go, exported types start with uppercase. Add 'pub' for exported structs.
+	pub_prefix := if struct_name.len > 0 && struct_name[0].is_capital() { 'pub ' } else { '' }
+	app.genln('${pub_prefix}struct ${v_struct_name} {')
 
 	// First output embedded structs (fields without names)
 	for field in spec.fields.list {
@@ -293,7 +399,8 @@ fn (mut app App) struct_decl(struct_name string, spec StructType) {
 		app.comments(field.doc)
 		for n in field.names {
 			app.gen('\t')
-			app.gen(app.go2v_ident(n.name))
+			// Field names must be snake_case and keywords must be escaped
+			app.gen(app.go2v_ident(n.name.camel_to_snake()))
 			app.gen(' ')
 			app.typ(field.typ)
 			if field.typ in [StarExpr, FuncType] {
@@ -325,7 +432,10 @@ fn (mut app App) interface_decl(interface_name string, spec InterfaceType) {
 	if interface_name.len == 1 {
 		v_interface_name = interface_name.capitalize() + interface_name.capitalize()
 	}
-	app.genln('interface ${v_interface_name} {')
+	// In Go, exported types start with uppercase. Add 'pub' for exported interfaces.
+	pub_prefix := if interface_name.len > 0 && interface_name[0].is_capital() { 'pub ' } else { '' }
+	app.genln('${pub_prefix}interface ${v_interface_name} {')
+	app.in_interface_decl = true
 	for field in spec.methods.list {
 		app.comments(field.doc)
 		for n in field.names {
@@ -336,6 +446,7 @@ fn (mut app App) interface_decl(interface_name string, spec InterfaceType) {
 			app.genln('')
 		}
 	}
+	app.in_interface_decl = false
 	app.genln('}\n')
 }
 
@@ -366,10 +477,29 @@ fn (mut app App) composite_lit(c CompositeLit) {
 			app.map_init(c)
 		}
 		SelectorExpr {
+			// Handle special Go types that need translation to V equivalents
+			sel := c.typ as SelectorExpr
+			if sel.x is Ident {
+				mod_name := (sel.x as Ident).name
+				type_name := sel.sel.name
+				// strings.Builder{} -> strings.new_builder(0)
+				if mod_name == 'strings' && type_name == 'Builder' {
+					app.gen('strings.new_builder(0)')
+					return
+				}
+				// bytes.Buffer{} -> strings.new_builder(0) (V uses strings.Builder for both)
+				if mod_name == 'bytes' && type_name == 'Buffer' {
+					app.gen('strings.new_builder(0)')
+					return
+				}
+			}
+
+			// Default handling for other SelectorExpr composite literals
 			force_upper := app.force_upper // save force upper for `mod.ForceUpper`
 			app.force_upper = true
 			app.selector_expr(c.typ)
 			app.force_upper = force_upper
+			// No space before { for module-qualified types in V
 			app.gen('{')
 			if c.elts.len > 0 {
 				app.genln('')
@@ -444,6 +574,26 @@ fn (app App) contains_iota(expr Expr) bool {
 	}
 }
 
+// Check if an expression is a bitflag pattern like `1 << iota`
+// These should not be converted to enums because V enums don't support bitwise operations
+fn (app App) is_bitflag_pattern(expr Expr) bool {
+	match expr {
+		BinaryExpr {
+			// Check for x << iota pattern
+			if expr.op == '<<' {
+				return app.contains_iota(expr.y)
+			}
+			return false
+		}
+		ParenExpr {
+			return app.is_bitflag_pattern(expr.x)
+		}
+		else {
+			return false
+		}
+	}
+}
+
 // Generate a synthetic struct for inline/anonymous struct types
 // Returns the generated struct name
 fn (mut app App) generate_inline_struct(expr Expr) string {
@@ -457,7 +607,7 @@ fn (mut app App) generate_inline_struct(expr Expr) string {
 	app.inline_struct_count++
 
 	// Build struct definition
-	mut result := '\nstruct ${struct_name} {\nmut:\n'
+	mut result := '\npub struct ${struct_name} {\nmut:\n'
 
 	for field in st.fields.list {
 		for n in field.names {

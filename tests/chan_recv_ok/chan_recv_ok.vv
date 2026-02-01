@@ -1,0 +1,11 @@
+module main
+
+fn test_chan_recv() {
+	mut ch := chan isize{}
+	value_opt := <-ch
+	ok := value_opt != none
+	value := value_opt or { 0 }
+	if ok {
+		println(value)
+	}
+}

@@ -1,6 +1,6 @@
 module main
 
-struct Struct1 {
+pub struct Struct1 {
 pub mut:
 	a isize
 	b []string

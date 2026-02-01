@@ -1,11 +1,11 @@
 module main
 
-struct aa {
+struct Aa {
 }
 
 fn main() {
 	mut aa := isize(42)
 }
 
-pub fn aa_1() {
+pub fn aa() {
 }

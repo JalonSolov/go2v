@@ -1,9 +1,9 @@
 module main
 
-import bytes
+import strings
 
 fn main() {
-	mut buf := &bytes.Buffer{}
+	mut buf := &strings.new_builder(0)
 	mut test := 'mytest'
 	buf.write_string(test)
 	buf.cap()

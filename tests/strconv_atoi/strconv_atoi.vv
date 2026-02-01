@@ -1,0 +1,15 @@
+module main
+
+import strconv
+
+fn test_atoi() {
+	mut err_ok := true
+	value := strconv.atoi('123') or {
+		err_ok = false
+		0
+	}
+	err := if err_ok { none } else { error('conversion failed') }
+	if err == none {
+		println(value)
+	}
+}

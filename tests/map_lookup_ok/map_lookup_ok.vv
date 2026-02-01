@@ -1,0 +1,12 @@
+module main
+
+fn test_map_lookup() {
+	mut m := {
+		'a': 1
+	}
+	ok := 'a' in m
+	value := m['a']
+	if ok {
+		println(value)
+	}
+}

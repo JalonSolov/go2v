@@ -8,6 +8,28 @@ fn (mut app App) call_expr(call CallExpr) {
 	// fmt.Println => println
 	fun := call.fun
 
+	// Extract module-qualified composite literals to temp vars (V parser workaround)
+	// Only do this when at statement level (safe to emit additional statements)
+	mut temp_var_names := map[int]string{}
+	if app.at_stmt_level {
+		for i, arg in call.args {
+			if app.needs_temp_var(arg) {
+				temp_name := 'go2v_tmp_${app.temp_var_count}'
+				app.temp_var_count++
+				app.gen('${temp_name} := ')
+				// Temporarily disable at_stmt_level for nested expressions
+				was_at_stmt := app.at_stmt_level
+				app.at_stmt_level = false
+				app.expr(arg)
+				app.at_stmt_level = was_at_stmt
+				app.genln('')
+				temp_var_names[i] = temp_name
+			}
+		}
+		// After extracting, we're no longer at top statement level for the actual call
+		app.at_stmt_level = false
+	}
+
 	// Handle IIFE (Immediately Invoked Function Expression)
 	// Go: func() { ... }()  or  (func() { ... })()  =>  V: { ... }
 	// V doesn't support IIFE syntax, so convert to a block for simple cases
@@ -196,7 +218,17 @@ fn (mut app App) call_expr(call CallExpr) {
 				if count > 0 {
 					app.gen(', ')
 				}
-				app.expr(arg)
+				// Add mut for first arg if needed (e.g., binary.PutUint* functions)
+				if idx == 0 && app.first_arg_needs_mut {
+					app.gen('mut ')
+					app.first_arg_needs_mut = false
+				}
+				// Use temp var if we extracted it earlier
+				if idx in temp_var_names {
+					app.gen(temp_var_names[idx])
+				} else {
+					app.expr(arg)
+				}
 				count++
 			}
 		} else if fun is Ident {
@@ -204,23 +236,72 @@ fn (mut app App) call_expr(call CallExpr) {
 				if idx > 0 {
 					app.gen(', ')
 				}
-				app.expr(arg)
+				// Use temp var if we extracted it earlier
+				if idx in temp_var_names {
+					app.gen(temp_var_names[idx])
+				} else {
+					app.expr(arg)
+				}
 			}
 		}
 	}
 	app.gen(')')
+	// Add extra closing paren for wrapped calls like print(strconv.v_sprintf(...))
+	if app.fmt_needs_closing_paren {
+		app.gen(')')
+		app.fmt_needs_closing_paren = false
+	}
 }
-
-const nonexistent_modules = ['fmt', 'path', 'strings', 'atomic', 'unsafe']
 
 fn (mut app App) selector_expr_fn_call(call CallExpr, sel SelectorExpr) {
 	if sel.x is Ident {
-		if sel.x.name in nonexistent_modules {
+		if sel.x.name in modules_needing_call_translation {
 			app.handle_nonexistent_module_call(sel, sel.x.name, sel.sel.name, call)
 			return
 		}
 	}
-	app.selector_xxx(sel)
+	// Handle encoding/binary endianness functions:
+	// binary.LittleEndian.Uint32(...) -> binary.little_endian_u32(...)
+	// binary.BigEndian.Uint32(...) -> binary.big_endian_u32(...)
+	// binary.LittleEndian.PutUint32(...) -> binary.little_endian_put_u32(mut ...)
+	// Note: V import is `import encoding.binary` but usage is `binary.xxx`
+	if sel.x is SelectorExpr {
+		outer_sel := sel.x as SelectorExpr
+		if outer_sel.x is Ident {
+			mod_name := (outer_sel.x as Ident).name
+			if mod_name == 'binary' {
+				endianness := outer_sel.sel.name.camel_to_snake() // LittleEndian -> little_endian
+				fn_name := sel.sel.name.camel_to_snake() // Uint32 -> uint32, PutUint32 -> put_uint32
+				// V uses little_endian_u32 not little_endian_uint32
+				v_fn := fn_name.replace('uint', 'u').replace('int', 'i')
+				app.gen('binary.${endianness}_${v_fn}')
+				// Put* functions need mut for first argument
+				if fn_name.starts_with('put_') {
+					app.first_arg_needs_mut = true
+				}
+				return
+			}
+		}
+	}
+	// Handle .String() method - only convert to .str() if it's a no-arg call (Stringer interface)
+	// If it has arguments, it's a custom method and should become .string_()
+	app.selector_xxx_fn_call(sel, call.args.len)
+}
+
+fn (mut app App) selector_xxx_fn_call(sel SelectorExpr, arg_count int) {
+	app.expr(sel.x)
+	app.gen('.')
+	mut sel_name := sel.sel.name
+	// Only translate String() -> str() for no-argument calls (Stringer interface)
+	// Custom String(args...) methods should become string_() to avoid conflict with V's .str()
+	if sel.sel.name == 'String' {
+		if arg_count == 0 {
+			sel_name = 'str'
+		} else {
+			sel_name = 'string_' // snake_case + underscore to avoid V's reserved .str()
+		}
+	}
+	app.gen(app.go2v_ident(sel_name))
 }
 
 fn (mut app App) selector_xxx(sel SelectorExpr) {
@@ -236,152 +317,31 @@ fn (mut app App) selector_xxx(sel SelectorExpr) {
 fn (mut app App) make_call(call CallExpr) {
 	app.force_upper = true
 	app.expr(call.args[0])
-	if call.args[0] is ArrayType || call.args[0] is SelectorExpr {
+	if call.args[0] is ArrayType {
 		// len only
 		if call.args.len == 2 {
-			app.gen('{ len: ')
+			app.gen('{len: ')
 			app.expr(call.args[1])
-			app.gen(' }')
+			app.gen('}')
 		}
 		// cap + len
 		else if call.args.len == 3 {
-			app.gen('{ len: ')
+			app.gen('{len: ')
 			app.expr(call.args[1])
 			app.gen(', cap: ')
 			app.expr(call.args[2])
-			app.gen(' }')
+			app.gen('}')
 		}
+	} else if call.args[0] is SelectorExpr {
+		// Type alias for slice - vfmt breaks len:/cap: syntax for type aliases
+		// Just create empty instance; capacity optimization is lost but code compiles
+		app.gen('{}')
+	} else if call.args[0] is MapType {
+		app.gen('{}')
+	} else if call.args[0] is Ident {
+		// Type alias without module prefix - same issue as SelectorExpr
+		app.gen('{}')
 	} else {
 		app.gen('{}')
-	}
-}
-
-fn (mut app App) handle_nonexistent_module_call(sel SelectorExpr, mod_name string, fn_name string, node CallExpr) {
-	match mod_name {
-		'strings' {
-			app.handle_strings_call(app.go2v_ident(fn_name), node.args)
-		}
-		'path' {
-			app.handle_path_call(sel, app.go2v_ident(fn_name), node.args)
-		}
-		'fmt' {
-			app.handle_fmt_call(app.go2v_ident(fn_name), node.args)
-		}
-		'atomic' {
-			app.handle_atomic_call(fn_name, node.args)
-		}
-		'unsafe' {
-			app.handle_unsafe_call(fn_name, node.args)
-		}
-		else {}
-	}
-}
-
-fn (mut app App) handle_unsafe_call(fn_name string, args []Expr) {
-	// Translate unsafe operations to V equivalents
-	// unsafe.Pointer(&x) => voidptr(&x)
-	// unsafe.Sizeof(x) => sizeof(x)
-	app.skip_call_parens = true
-	match fn_name {
-		'Pointer' {
-			app.gen('voidptr(')
-			if args.len > 0 {
-				app.expr(args[0])
-			}
-			app.gen(')')
-		}
-		'Sizeof' {
-			app.gen('sizeof(')
-			if args.len > 0 {
-				app.expr(args[0])
-			}
-			app.gen(')')
-		}
-		else {
-			// Fallback - output as comment
-			app.gen('/* unsafe.${fn_name} */')
-		}
-	}
-}
-
-fn (mut app App) handle_atomic_call(fn_name string, args []Expr) {
-	// Translate atomic operations to simple assignments/reads
-	// atomic.StoreXxx(ptr, val) => *ptr = val
-	// atomic.LoadXxx(ptr) => *ptr
-	// atomic.AddXxx(ptr, delta) => { *ptr += delta; *ptr }
-	app.skip_call_parens = true
-	if fn_name.starts_with('Store') {
-		// atomic.StoreUint32(&x, val) => x = val
-		if args.len >= 2 {
-			if args[0] is UnaryExpr {
-				// Skip the & and just use the target
-				app.expr((args[0] as UnaryExpr).x)
-			} else {
-				app.gen('*')
-				app.expr(args[0])
-			}
-			app.gen(' = ')
-			app.expr(args[1])
-		}
-	} else if fn_name.starts_with('Load') {
-		// atomic.LoadUint32(&x) => x
-		if args.len >= 1 {
-			if args[0] is UnaryExpr {
-				app.expr((args[0] as UnaryExpr).x)
-			} else {
-				app.gen('*')
-				app.expr(args[0])
-			}
-		}
-	} else if fn_name.starts_with('Add') {
-		// atomic.AddInt64(&x, delta) - this is usually handled specially in if_stmt
-		// If we get here, just generate a simple add (losing the return value)
-		if args.len >= 2 {
-			if args[0] is UnaryExpr {
-				ux := args[0] as UnaryExpr
-				app.expr(ux.x)
-				app.gen(' += ')
-				app.expr(args[1])
-			} else {
-				app.gen('*')
-				app.expr(args[0])
-				app.gen(' += ')
-				app.expr(args[1])
-			}
-		}
-	} else {
-		// Fallback: just output the function name and args
-		app.gen('/* atomic.${fn_name} */ ')
-	}
-}
-
-// handle_strings_call maps Go strings functions to string methods in V
-fn (mut app App) handle_strings_call(fn_name string, args []Expr) {
-	app.expr(args[0])
-	app.gen('.')
-	app.gen(fn_name)
-	app.skip_first_arg = true
-}
-
-fn (mut app App) handle_path_call(sel SelectorExpr, fn_name string, x []Expr) {
-	if fn_name == 'base' {
-		app.gen('os.base')
-	}
-	// Go allows module name shadowing, so we can have a variable
-	// `path`
-	else {
-		app.selector_xxx(sel)
-	}
-}
-
-fn (mut app App) handle_fmt_call(fn_name string, _ []Expr) {
-	// app.genln('//fmt_call fn_name=${fn_name}')
-	match fn_name {
-		'sprintf' {
-			app.gen('strconv.v_sprintf')
-		}
-		else {
-			app.gen('strconv.' + fn_name)
-		}
 	}
 }

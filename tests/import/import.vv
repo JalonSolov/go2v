@@ -1,7 +1,5 @@
 module main
 
-import compress.zip
-import bytes
 import compress.deflate
 import compress.zlib
 import datatypes

@@ -1,6 +1,6 @@
 module main
 
-struct Node {
+pub struct Node {
 pub mut:
 	parent       &Node = unsafe { nil }
 	first_child  &Node = unsafe { nil }

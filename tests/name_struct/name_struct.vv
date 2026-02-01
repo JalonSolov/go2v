@@ -1,6 +1,6 @@
 module main
 
-struct ClData {
+pub struct ClData {
 pub mut:
 	module string
 }

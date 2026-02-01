@@ -2,7 +2,7 @@ module main
 
 fn main() {
 	mut z := isize(123)
-	if 1000 <= z && true || false {
+	if (1000 <= z && true) || false {
 		mut ho := -1
 	} else {
 		mut z_1 := isize(324)

@@ -1,11 +1,11 @@
 module main
 
-struct AA {
+pub struct AA {
 pub mut:
 	aa isize
 }
 
-struct BB {
+pub struct BB {
 	AA
 pub mut:
 	bb isize
@@ -14,5 +14,5 @@ pub mut:
 fn main() {
 	mut b := BB{}
 	b.bb = isize(2)
-	b.AA.aa = isize(4)
+	b.a.aa = isize(4)
 }

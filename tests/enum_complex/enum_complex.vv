@@ -5,11 +5,11 @@ enum EnumFieldTest {
 	enum_field_five = 5
 	enum_field_six
 }
-__global DefaultMsgAcceptFunc = default_msg_accept_func
+__global default_msg_accept_func = default_msg_accept_func
 enum msgAcceptAction {
 	msg_accept
 }
 
 fn default_msg_accept_func() {
-	return msg_accept
+	return .msg_accept
 }

@@ -1,0 +1,26 @@
+module main
+
+import os
+
+fn test_lookup_env() {
+	value_opt := os.getenv_opt('MY_VAR')
+	ok := value_opt != none
+	value := value_opt or { '' }
+	if ok {
+		println(value)
+	}
+}
+
+fn test_lookup_env_discard_ok() {
+	value_opt := os.getenv_opt('MY_VAR')
+	value := value_opt or { '' }
+	println(value)
+}
+
+fn test_lookup_env_discard_value() {
+	env_opt_tmp := os.getenv_opt('MY_VAR')
+	ok := env_opt_tmp != none
+	if ok {
+		println('found')
+	}
+}

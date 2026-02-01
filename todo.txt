@@ -9,3 +9,15 @@
 - `[]sourcemap.SourceMapShift{{}}`
 - `const x = 1 << iota`
 
+
+
+
+  The remaining errors are in categories that require deeper changes:
+  - Option type handling (?int vs int for string methods) [DONE - see tests/option_type, map_lookup_ok, chan_recv_ok, strconv_atoi]
+    - os.LookupEnv pattern: value, ok := os.LookupEnv("X")
+    - Map lookup comma-ok: value, ok := m[key]
+    - Channel receive comma-ok: value, ok := <-ch
+    - strconv functions: value, err := strconv.Atoi("123")
+  - Enum value scoping (need full enum name in comparisons)
+  - Various void type initialization issues
+  - Match exhaustiveness

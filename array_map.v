@@ -22,7 +22,14 @@ fn (mut app App) array_init(c CompositeLit) {
 					elt_name = ''
 				}
 				Ident {
-					elt_name = go2v_type(typ.elt.name)
+					// Get the converted type, capitalize if it's a struct/type name
+					type_conv := go2v_type_checked(typ.elt.name)
+					if type_conv.is_basic {
+						elt_name = type_conv.v_type
+					} else {
+						// Struct/type names must be capitalized in V
+						elt_name = typ.elt.name.capitalize()
+					}
 					elt_is_ident = true
 				}
 				SelectorExpr {
@@ -98,8 +105,8 @@ fn (mut app App) array_init(c CompositeLit) {
 										if j > 0 {
 											app.gen(', ')
 										}
-										// Only add type cast on first element of first inner array
-										if i == 0 && j == 0 && inner_type_name != ''
+										// Add type cast on first element of each inner array
+										if j == 0 && inner_type_name != ''
 											&& inner_type_name != 'string'
 											&& !inner_type_name.starts_with_capital() {
 											app.gen('${inner_type_name}(')
@@ -268,7 +275,14 @@ fn (mut app App) array_init(c CompositeLit) {
 }
 
 fn (mut app App) map_init(node CompositeLit) {
-	app.expr(node.typ)
+	// In V, non-empty map initialization uses { key: value } syntax without the map[K]V prefix
+	// Empty maps use map[K]V{}
+	if node.elts.len == 0 {
+		app.expr(node.typ)
+		app.gen('{}')
+		return
+	}
+	// For non-empty maps, just use { ... } syntax
 	app.genln('{')
 	map_typ := node.typ as MapType
 	for elt in node.elts {
@@ -320,9 +334,8 @@ fn (mut app App) map_init(node CompositeLit) {
 				}
 				app.gen(']')
 			} else if map_typ.val is MapType {
-				// Nested map - generate map literal with explicit type
+				// Nested map - just generate the map literal (no type prefix for non-empty maps)
 				nested_map_typ := map_typ.val as MapType
-				app.map_type(nested_map_typ)
 				app.nested_map_init(comp, nested_map_typ)
 			} else {
 				// Implicit struct value - need to prefix with map's value type

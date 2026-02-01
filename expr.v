@@ -110,6 +110,20 @@ fn (mut app App) binary_expr(b BinaryExpr) {
 			app.gen('+')
 			app.expr(y)
 		}
+	} else if (b.op == '==' || b.op == '!=') && app.is_error_nil_comparison(b) {
+		// Handle error variable comparison with nil: err == nil => err == none
+		app.gen_error_nil_comparison(b)
+	} else if b.op in ['<', '>', '<=', '>='] && app.is_potential_enum_comparison(b) {
+		// V enums only support == and != directly, not ordering comparisons
+		// We need to cast both sides to int, but for enum values (Ident),
+		// we need to use the full qualified name (e.g., LogLevel.level_info)
+		// We try to infer the enum type from the selector field name
+		enum_type := app.infer_enum_type_from_comparison(b)
+		app.gen('int(')
+		app.gen_enum_expr_with_type(b.x, enum_type)
+		app.gen(') ${b.op} int(')
+		app.gen_enum_expr_with_type(b.y, enum_type)
+		app.gen(')')
 	} else {
 		// Wrap composite literals in parentheses when used in comparisons
 		// V parser gets confused by {} in binary expressions
@@ -124,9 +138,11 @@ fn (mut app App) binary_expr(b BinaryExpr) {
 			app.gen(')')
 		}
 		if b.op == '\u0026^' {
-			app.gen('&~')
+			app.gen(' &~ ')
 		} else {
-			app.gen(b.op)
+			// Add spaces around operators for clarity and to avoid parsing issues
+			// e.g., `}&&` could be misinterpreted
+			app.gen(' ${b.op} ')
 		}
 		if y_needs_parens {
 			app.gen('(')
@@ -135,6 +151,112 @@ fn (mut app App) binary_expr(b BinaryExpr) {
 		if y_needs_parens {
 			app.gen(')')
 		}
+	}
+}
+
+// Check if this is an error variable being compared to nil
+fn (app App) is_error_nil_comparison(b BinaryExpr) bool {
+	// Check if x is error var and y is nil, or vice versa
+	x_is_err := if b.x is Ident { b.x.name.camel_to_snake() in app.error_vars } else { false }
+	y_is_nil := if b.y is Ident { b.y.name == 'nil' } else { false }
+	if x_is_err && y_is_nil {
+		return true
+	}
+	x_is_nil := if b.x is Ident { b.x.name == 'nil' } else { false }
+	y_is_err := if b.y is Ident { b.y.name.camel_to_snake() in app.error_vars } else { false }
+	if x_is_nil && y_is_err {
+		return true
+	}
+	return false
+}
+
+// Generate error comparison with none instead of unsafe { nil }
+fn (mut app App) gen_error_nil_comparison(b BinaryExpr) {
+	x_is_nil := if b.x is Ident { b.x.name == 'nil' } else { false }
+	if x_is_nil {
+		app.gen('none ${b.op} ')
+		app.expr(b.y)
+	} else {
+		app.expr(b.x)
+		app.gen(' ${b.op} none')
+	}
+}
+
+// Common field names that likely contain enum values
+const enum_field_names = ['kind', 'type', 'level', 'mode', 'state', 'status', 'op', 'opcode', 'flag',
+	'stage', 'log_level']
+
+// Check if this is an enum comparison that requires int() cast in V
+// V enums only support == and != operators, not < > <= >=
+fn (app App) is_potential_enum_comparison(b BinaryExpr) bool {
+	// Check if x side is a selector accessing an enum-like field
+	if b.x is SelectorExpr {
+		x_sel := b.x as SelectorExpr
+		x_field := x_sel.sel.name.camel_to_snake()
+		if x_field in enum_field_names {
+			return true
+		}
+	}
+	// Check if y side is a selector accessing an enum-like field
+	if b.y is SelectorExpr {
+		y_sel := b.y as SelectorExpr
+		y_field := y_sel.sel.name.camel_to_snake()
+		if y_field in enum_field_names {
+			return true
+		}
+	}
+	// Check if either side is an enum value (Ident that's in our enum_values set)
+	// Use camel_to_snake to convert Go name to V name for lookup
+	if b.x is Ident {
+		x_name := (b.x as Ident).name.camel_to_snake()
+		if x_name in app.enum_values {
+			return true
+		}
+	}
+	if b.y is Ident {
+		y_name := (b.y as Ident).name.camel_to_snake()
+		if y_name in app.enum_values {
+			return true
+		}
+	}
+	return false
+}
+
+// infer_enum_type_from_comparison tries to infer the enum type name from a comparison
+// by looking at selector expressions. E.g., options.log_level suggests LogLevel type.
+fn (app App) infer_enum_type_from_comparison(b BinaryExpr) string {
+	// Check if x side is a selector accessing an enum-like field
+	if b.x is SelectorExpr {
+		x_sel := b.x as SelectorExpr
+		field_name := x_sel.sel.name.camel_to_snake()
+		// Convert field name to potential enum type name
+		// e.g., log_level -> LogLevel
+		return field_name.replace('_', ' ').title().replace(' ', '')
+	}
+	// Check if y side is a selector accessing an enum-like field
+	if b.y is SelectorExpr {
+		y_sel := b.y as SelectorExpr
+		field_name := y_sel.sel.name.camel_to_snake()
+		return field_name.replace('_', ' ').title().replace(' ', '')
+	}
+	return ''
+}
+
+// gen_enum_expr_with_type generates an expression for enum comparison
+// For Ident enum values, it uses the full qualified name (e.g., LogLevel.level_info)
+fn (mut app App) gen_enum_expr_with_type(e Expr, enum_type string) {
+	if e is Ident {
+		v_name := app.go2v_ident(e.name)
+		// If this is an enum value and we have a type name, use qualified name
+		if v_name in app.enum_values && enum_type != '' {
+			app.gen('${enum_type}.${v_name}')
+		} else {
+			// Fallback to normal expression
+			app.expr(e)
+		}
+	} else {
+		// For other expressions (like selector expr), use normal expr()
+		app.expr(e)
 	}
 }
 
@@ -153,12 +275,22 @@ fn (mut app App) chan_type(node ChanType) {
 }
 
 fn (mut app App) ident(node Ident) {
+	// Handle iota in const blocks - replace with actual numeric value
+	if node.name == 'iota' && app.in_const_block {
+		app.gen('${app.current_iota_value}')
+		return
+	}
 	// Check if this variable was renamed due to shadowing (using Go name as key)
 	if node.name in app.name_mapping {
 		app.gen(go2v_type(app.name_mapping[node.name]))
 		return
 	}
-	app.gen(go2v_type(app.go2v_ident(node.name)))
+	v_name := app.go2v_ident(node.name)
+	// Add . prefix for enum values in V
+	if v_name in app.enum_values {
+		app.gen('.')
+	}
+	app.gen(go2v_type(v_name))
 }
 
 fn (mut app App) index_expr(s IndexExpr) {
@@ -192,11 +324,15 @@ fn (mut app App) map_type(node MapType) {
 			}
 		}
 		SelectorExpr {
-			app.typ(node.key)
+			// V doesn't support struct types as map keys (e.g., map[pkg.Type]V)
+			// Convert to voidptr for pointer-based comparison
+			app.gen('voidptr')
 		}
 		StarExpr {
 			// Pointer type as map key, e.g., map[*Node]bool
-			app.star_expr(node.key)
+			// V doesn't support pointer types as map keys
+			// Convert to voidptr for pointer-based comparison
+			app.gen('voidptr')
 		}
 		else {}
 	}
@@ -299,6 +435,43 @@ fn quoted_lit(s string, quote string) string {
 }
 
 fn (mut app App) selector_expr(s SelectorExpr) {
+	// Handle special runtime and os selectors
+	if s.x is Ident {
+		ident := s.x as Ident
+		if ident.name == 'runtime' {
+			match s.sel.name {
+				'GOOS' {
+					// runtime.GOOS -> os.user_os()
+					app.gen('os.user_os()')
+					return
+				}
+				'GOARCH' {
+					// runtime.GOARCH -> os.uname().machine
+					app.gen('os.uname().machine')
+					return
+				}
+				else {}
+			}
+		} else if ident.name == 'os' {
+			// Go's os.Stderr/Stdout/Stdin are variables (*os.File)
+			// V's os.stderr/stdout/stdin are functions that return File
+			match s.sel.name {
+				'Stderr' {
+					app.gen('os.stderr()')
+					return
+				}
+				'Stdout' {
+					app.gen('os.stdout()')
+					return
+				}
+				'Stdin' {
+					app.gen('os.stdin()')
+					return
+				}
+				else {}
+			}
+		}
+	}
 	force_upper := app.force_upper // save force upper for `mod.ForceUpper`
 	app.force_upper = false
 	app.expr(s.x)

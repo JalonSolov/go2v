@@ -3,21 +3,21 @@ module main
 import crypto.aes
 import text.encoding
 
-struct BinTree {
+pub struct BinTree {
 pub mut:
 	sil []&BinTree = unsafe { nil }
 }
 
-struct htmlEncoding {
+struct HtmlEncoding {
 	encoding.Encoding
 }
 
-struct BinTree_1 {
+pub struct BinTree_1 {
 pub mut:
 	exter []&aes.KeySizeError
 }
 
-struct Foo {
+pub struct Foo {
 pub mut:
 	abc [3]isize
 	def [][2]string

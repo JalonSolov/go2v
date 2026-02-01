@@ -3,7 +3,7 @@ module main
 fn (a Abc) ok(d isize, b []string, c rune) string {
 }
 
-struct Abc {
+pub struct Abc {
 pub mut:
 	a isize
 }

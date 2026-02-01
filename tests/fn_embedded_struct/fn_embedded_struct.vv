@@ -3,7 +3,7 @@ module main
 fn abc(a isize, b []string, c Ok) {
 }
 
-struct Ok {
+pub struct Ok {
 pub mut:
 	a isize
 	b []string

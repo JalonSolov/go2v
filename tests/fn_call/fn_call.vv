@@ -7,12 +7,12 @@ fn main() {
 	println('okkk')
 }
 
-struct Test1 {
+pub struct Test1 {
 pub mut:
 	a Test2
 }
 
-struct Test2 {
+pub struct Test2 {
 }
 
 pub fn (t Test2) test() {

@@ -68,6 +68,9 @@ fn (mut app App) stmt(stmt Stmt) {
 
 fn (mut app App) block_stmt(body BlockStmt) {
 	app.genln('{')
+	// Named return params are handled by converting first assignment to declaration
+	// (see assign_stmt.v convert_to_decl logic)
+	app.pending_named_returns = false
 	app.stmt_list(body.list)
 	app.genln('}')
 }
@@ -99,17 +102,70 @@ fn (mut app App) decl_stmt(d DeclStmt) {
 							}
 							app.gen(' := ')
 
-							cast := if spec.typ != ValueSpecType{} {
-								go2v_type(spec.typ.name.to_lower())
+							cast := if spec.typ is Ident {
+								ident := spec.typ as Ident
+								go2v_type(ident.name.to_lower())
 							} else {
 								''
 							}
 							if spec.values.len == 0 {
+								// Handle function type variables (zero value is unsafe { nil })
+								if spec.typ is FuncType {
+									app.gen('unsafe { nil }')
+									continue
+								}
+								// For struct/named types (Ident), generate Type{}
+								// But NOT for basic types like string, int, etc.
+								if spec.typ is Ident {
+									ident := spec.typ as Ident
+									if ident.name != '' {
+										// Check if it's a basic type
+										type_info := go2v_type_checked(ident.name)
+										if type_info.is_basic {
+											// For basic types, use gen_zero_value
+											app.gen_zero_value(spec.typ)
+											app.genln('')
+											continue
+										}
+										// For custom/struct types, generate Type{}
+										app.force_upper = true
+										app.gen(app.go2v_ident(ident.name))
+										app.genln('{}')
+										continue
+									}
+								}
+								// Handle SelectorExpr types (e.g., strings.Builder)
+								if spec.typ is SelectorExpr {
+									sel := spec.typ as SelectorExpr
+									if sel.x is Ident {
+										mod := (sel.x as Ident).name
+										type_name := sel.sel.name
+										// strings.Builder => strings.new_builder(0)
+										if mod == 'strings' && type_name == 'Builder' {
+											app.genln('strings.new_builder(0)')
+											continue
+										}
+										// Other types: mod.TypeName{}
+										app.gen('${mod}.${type_name}')
+										app.genln('{}')
+										continue
+									}
+								}
+								// Handle ArrayType (e.g., [4]byte)
+								if spec.typ is ArrayType {
+									arr := spec.typ as ArrayType
+									app.gen('[')
+									app.expr(arr.len)
+									app.gen(']')
+									app.expr(arr.elt)
+									app.genln('{}')
+									continue
+								}
 								app.force_upper = true
 								if cast != '' {
 									app.gen('${cast}(')
 								}
-								app.gen_zero_value(spec.names[0])
+								app.gen_zero_value(spec.typ)
 								if cast != '' {
 									app.genln(')')
 								}
@@ -186,7 +242,18 @@ fn (mut app App) defer_stmt(node DeferStmt) {
 }
 
 fn (mut app App) expr_stmt(stmt ExprStmt) {
+	// Handle channel receive as statement: <-ch needs to become _ := <-ch in V
+	if stmt.x is UnaryExpr {
+		u := stmt.x as UnaryExpr
+		if u.op == '<-' {
+			app.gen('_ := ')
+		}
+	}
+	// Mark that we're at statement level (safe to emit temp var declarations)
+	was_at_stmt_level := app.at_stmt_level
+	app.at_stmt_level = true
 	app.expr(stmt.x)
+	app.at_stmt_level = was_at_stmt_level
 	app.genln('')
 }
 
@@ -243,7 +310,7 @@ fn (mut app App) for_stmt(f ForStmt) {
 }
 
 fn (mut app App) go_stmt(stmt GoStmt) {
-	app.gen('go ')
+	app.gen('spawn ')
 	app.in_go_stmt = true
 	app.expr(stmt.call)
 	app.in_go_stmt = false
@@ -342,8 +409,17 @@ fn (mut app App) handle_atomic_add_init(init AssignStmt) {
 }
 
 fn (mut app App) inc_dec_stmt(i IncDecStmt) {
+	// Handle dereferenced pointer increment/decrement: *ptr++ -> ptr[0]++
+	match i.x {
+		StarExpr {
+			app.expr(i.x.x)
+			app.genln('[0]${i.tok}')
+			return
+		}
+		else {}
+	}
 	app.expr(i.x)
-	app.gen(i.tok)
+	app.genln(i.tok)
 }
 
 fn (mut app App) labeled_stmt(l LabeledStmt) {
@@ -358,15 +434,25 @@ fn (mut app App) range_stmt(node RangeStmt) {
 	if node.key.name == '' {
 		app.gen('_ ')
 	} else {
-		key_name := app.unique_name_anti_shadow(app.go2v_ident(node.key.name))
+		v_key := app.go2v_ident(node.key.name)
+		key_name := app.unique_name_anti_shadow(v_key)
 		app.cur_fn_names[key_name] = true
+		// Add mapping if name was changed due to shadowing
+		if key_name != v_key {
+			app.name_mapping[node.key.name] = key_name
+		}
 		app.gen(key_name)
 		app.gen(', ')
 		if node.value.name == '' {
 			app.gen(' _ ')
 		} else {
-			value_name := app.unique_name_anti_shadow(app.go2v_ident(node.value.name))
+			v_val := app.go2v_ident(node.value.name)
+			value_name := app.unique_name_anti_shadow(v_val)
 			app.cur_fn_names[value_name] = true
+			// Add mapping if name was changed due to shadowing
+			if value_name != v_val {
+				app.name_mapping[node.value.name] = value_name
+			}
 			app.gen(value_name)
 		}
 	}
@@ -376,20 +462,192 @@ fn (mut app App) range_stmt(node RangeStmt) {
 	app.block_stmt(node.body)
 }
 
+// Check if expression is a module-qualified composite literal (e.g., api.WatchOptions{})
+// V's parser has issues with these in certain contexts (function arguments, multi-value returns)
+fn (app App) needs_temp_var(expr Expr) bool {
+	if expr is CompositeLit {
+		// Only module-qualified types (SelectorExpr) need extraction
+		return expr.typ is SelectorExpr
+	}
+	return false
+}
+
+// Extract all nested module-qualified composite literals from a composite literal
+// Returns a map from field index to temp var name
+fn (mut app App) extract_nested_structs(c CompositeLit) map[int]string {
+	mut nested_temps := map[int]string{}
+	for i, elt in c.elts {
+		if elt is KeyValueExpr {
+			if app.needs_temp_var(elt.value) {
+				// Recursively extract nested structs from the nested struct first
+				nested_cl := elt.value as CompositeLit
+				inner_temps := app.extract_nested_structs(nested_cl)
+
+				// Now generate the nested struct with any inner temp var substitutions
+				temp_name := 'go2v_tmp_${app.temp_var_count}'
+				app.temp_var_count++
+				app.gen('${temp_name} := ')
+				app.composite_lit_with_temps(nested_cl, inner_temps)
+				app.genln('')
+				nested_temps[i] = temp_name
+			}
+		}
+	}
+	return nested_temps
+}
+
+// Generate a composite literal using pre-extracted temp vars for nested structs
+fn (mut app App) composite_lit_with_temps(c CompositeLit, temps map[int]string) {
+	if c.typ !is SelectorExpr {
+		app.composite_lit(c)
+		return
+	}
+
+	force_upper := app.force_upper
+	app.force_upper = true
+	app.selector_expr(c.typ as SelectorExpr)
+	app.force_upper = force_upper
+
+	app.gen('{')
+	if c.elts.len > 0 {
+		app.genln('')
+	}
+	for i, elt in c.elts {
+		if i in temps {
+			// Use the pre-extracted temp var
+			if elt is KeyValueExpr {
+				if elt.key is Ident {
+					app.gen('\t${app.go2v_ident(elt.key.name)}: ${temps[i]}')
+				} else {
+					app.expr(elt.key)
+					app.gen(': ${temps[i]}')
+				}
+				app.genln('')
+			}
+		} else {
+			app.expr(elt)
+			app.genln('')
+		}
+	}
+	app.gen('}')
+}
+
+// Extract composite literals with SelectorExpr type to temporary variables
+// Returns list of (temp_var_name, expr) pairs
+fn (mut app App) extract_temp_vars(exprs []Expr) ([]Expr, []string) {
+	mut result := []Expr{cap: exprs.len}
+	mut temp_names := []string{}
+	for expr in exprs {
+		if app.needs_temp_var(expr) {
+			temp_name := 'go2v_tmp_${app.temp_var_count}'
+			app.temp_var_count++
+			// Emit the temp variable declaration
+			app.gen('${temp_name} := ')
+			app.expr(expr)
+			app.genln('')
+			// Use Ident to reference the temp var later
+			result << Ident{
+				name: temp_name
+			}
+			temp_names << temp_name
+		} else {
+			result << expr
+		}
+	}
+	return result, temp_names
+}
+
 fn (mut app App) return_stmt(node ReturnStmt) {
 	// V doesn't allow return inside defer blocks
 	if app.in_defer_block {
 		app.genln('// return inside defer not supported in V')
 		return
 	}
-	app.gen('return ')
-	for i, result in node.results {
-		app.expr(result)
-		if i < node.results.len - 1 {
-			app.gen(',')
+
+	// Handle bare return with named return parameters
+	if node.results.len == 0 && app.named_return_types.len > 0 {
+		app.gen('return ')
+		mut first := true
+		for name, _ in app.named_return_types {
+			if !first {
+				app.gen(', ')
+			}
+			app.gen(app.go2v_ident(name))
+			first = false
+		}
+		app.genln('')
+		return
+	}
+
+	// Handle return nil for array/map types - convert to empty array/map
+	if node.results.len == 1 && app.named_return_types.len == 1 {
+		result := node.results[0]
+		if result is Ident && result.name == 'nil' {
+			// Get the single return type
+			for _, typ in app.named_return_types {
+				match typ {
+					ArrayType {
+						app.gen('return ')
+						app.force_upper = true
+						app.array_type(typ)
+						app.genln('{}')
+						return
+					}
+					MapType {
+						app.gen('return ')
+						app.map_type(typ)
+						app.genln('{}')
+						return
+					}
+					else {}
+				}
+			}
 		}
 	}
-	app.genln('')
+
+	// For multi-value returns with module-qualified composite literals,
+	// extract to temp vars first. V's parser has issues with: return api.Type{}, nil, err
+	if node.results.len > 1 {
+		mut temp_names := []string{}
+		for result in node.results {
+			if app.needs_temp_var(result) {
+				cl := result as CompositeLit
+				// First extract any nested module-qualified structs
+				nested_temps := app.extract_nested_structs(cl)
+
+				// Generate the temp var with nested temps already extracted
+				temp_name := 'go2v_tmp_${app.temp_var_count}'
+				app.temp_var_count++
+				app.gen('${temp_name} := ')
+				app.composite_lit_with_temps(cl, nested_temps)
+				app.genln('')
+				temp_names << temp_name
+			} else {
+				temp_names << ''
+			}
+		}
+		app.gen('return ')
+		for i, result in node.results {
+			if temp_names[i] != '' {
+				app.gen(temp_names[i])
+			} else {
+				app.expr(result)
+			}
+			if i < node.results.len - 1 {
+				app.gen(', ')
+			}
+		}
+		app.genln('')
+	} else {
+		app.gen('return ')
+		for i, result in node.results {
+			app.expr(result)
+			if i < node.results.len - 1 {
+				app.gen(',')
+			}
+		}
+		app.genln('')
+	}
 }
 
 fn (mut app App) send_stmt(node SendStmt) {

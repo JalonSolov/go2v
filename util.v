@@ -60,6 +60,10 @@ fn go2v_type_checked(typ string) TypeConversion {
 		'uint64' {
 			return TypeConversion{'u64', true}
 		}
+		// Go's error interface - translate to IError in V
+		'error' {
+			return TypeConversion{'IError', true}
+		}
 		// Basic types that stay the same
 		'string', 'bool', 'voidptr', 'rune' {
 			return TypeConversion{typ, true}
@@ -72,8 +76,11 @@ fn go2v_type_checked(typ string) TypeConversion {
 // V keywords that need escaping - split into regular keywords and literals
 // V keywords that need escaping in identifiers
 // Only include keywords that cause issues when used as variable/function names
-const v_keywords = ['match', 'in', 'fn', 'as', 'enum', 'typeof', 'or', 'and', 'is', 'not']
+const v_keywords = ['match', 'in', 'fn', 'as', 'enum', 'typeof', 'or', 'and', 'is', 'not', 'error']
 const v_literals = ['true', 'false', 'none'] // These are only escaped when converted from different case
+// V type names that conflict with field/method names (e.g., name.string would be interpreted as module access)
+const v_type_names = ['string', 'int', 'bool', 'f32', 'f64', 'i8', 'i16', 'i32', 'i64', 'u8', 'u16',
+	'u32', 'u64', 'isize', 'usize', 'rune', 'voidptr']
 
 // Greek letters to ASCII equivalents for V compatibility
 const greek_to_ascii = {
@@ -140,16 +147,25 @@ fn (mut app App) go2v_ident(ident string) string {
 		return 'unsafe { nil }'
 	}
 
-	// Preserve original casing for struct/type aliases
-	if ident in app.struct_or_alias {
-		was_force_upper := app.force_upper
+	// Check for type name conflicts with V's standard library (when used as types)
+	if app.force_upper {
+		if renamed := conflicting_type_names[id.capitalize()] {
+			app.force_upper = false
+			return renamed
+		}
+	}
+
+	// Preserve original casing for struct/type aliases ONLY when in a type context
+	// (i.e., when force_upper is true). Otherwise, field accesses like r.Loc should
+	// be converted to r.loc even if Loc is also a struct name.
+	if app.force_upper && ident in app.struct_or_alias {
 		app.force_upper = false // Reset force_upper even for early return
 		// Single letter names need to be doubled (reserved for generics in V)
 		if id.len == 1 {
 			return id.capitalize() + id.capitalize()
 		}
 		// Type aliases in V must start with capital letter
-		if was_force_upper && !id[0].is_capital() {
+		if !id[0].is_capital() {
 			return id.capitalize()
 		}
 		return id
@@ -174,6 +190,12 @@ fn (mut app App) go2v_ident(ident string) string {
 	// Only escape V literals (true, false, none) if they came from a different case
 	// This allows Go boolean literals to pass through unchanged
 	if id in v_literals && id != ident {
+		id = id + '_'
+	}
+
+	// Escape V type names when used as field/method names (e.g., .string becomes .string_)
+	// This prevents V from interpreting x.string as module access
+	if id in v_type_names {
 		id = id + '_'
 	}
 

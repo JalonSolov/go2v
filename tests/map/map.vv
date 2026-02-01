@@ -1,6 +1,6 @@
 module main
 
-struct Vertex {
+pub struct Vertex {
 pub mut:
 	lat  f64
 	long f64

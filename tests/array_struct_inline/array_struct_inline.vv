@@ -8,13 +8,13 @@ fn main() {
 	mut a := [Go2VInlineStruct_1{0}]
 }
 
-struct Go2VInlineStruct {
+pub struct Go2VInlineStruct {
 mut:
 	bom []isize
 	enc string
 }
 
-struct Go2VInlineStruct_1 {
+pub struct Go2VInlineStruct_1 {
 mut:
 	num isize
 }

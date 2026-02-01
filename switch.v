@@ -58,12 +58,27 @@ fn (mut app App) switch_stmt(switch_stmt SwitchStmt) {
 	for stmt in switch_stmt.body.list {
 		case_clause := stmt as CaseClause
 		for i, x in case_clause.list {
-			app.expr(x)
+			// Check if this is an enum value and add . prefix
+			if x is Ident {
+				v_name := app.go2v_ident(x.name)
+				if v_name in app.enum_values {
+					app.gen('.${v_name}')
+				} else {
+					app.expr(x)
+				}
+			} else {
+				app.expr(x)
+			}
 			if i < case_clause.list.len - 1 {
 				app.gen(',')
 			}
 		}
 		if case_clause.list.len == 0 {
+			// Default case - check if it only contains a panic (defensive default)
+			// If so, skip it since V will complain about exhaustive match with else
+			if app.is_defensive_panic_only(case_clause.body) {
+				continue
+			}
 			app.gen('else ')
 		}
 		app.genln('{')
@@ -145,6 +160,29 @@ fn (mut app App) type_switch_stmt(node TypeSwitchStmt) {
 		app.genln('}')
 	}
 	app.genln('}')
+}
+
+// Check if a statement list only contains a panic call (defensive default case)
+// These are typically used in exhaustive switches and should be skipped in V
+fn (app App) is_defensive_panic_only(stmts []Stmt) bool {
+	if stmts.len != 1 {
+		return false
+	}
+	// Check if it's a panic call
+	match stmts[0] {
+		ExprStmt {
+			expr := stmts[0] as ExprStmt
+			if expr.x is CallExpr {
+				call := expr.x as CallExpr
+				if call.fun is Ident {
+					fn_name := (call.fun as Ident).name
+					return fn_name == 'panic'
+				}
+			}
+		}
+		else {}
+	}
+	return false
 }
 
 // Helper to extract the type name from a case pattern in type switch

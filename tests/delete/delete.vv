@@ -1,6 +1,6 @@
 module main
 
-struct MyStruct {
+pub struct MyStruct {
 pub mut:
 	msm map[string]isize
 }

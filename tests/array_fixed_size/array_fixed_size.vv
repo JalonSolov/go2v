@@ -1,6 +1,6 @@
 module main
 
-struct Ok {
+pub struct Ok {
 }
 
 fn main() {
