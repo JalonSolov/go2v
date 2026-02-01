@@ -281,18 +281,29 @@ fn (mut app App) func_lit(node FuncLit) {
 		if ident in declared_in_closure {
 			continue
 		}
-		// Check both the original Go name and V-converted name
-		v_name := app.go2v_ident(ident)
+		// Check if this variable was renamed due to shadowing
+		// If so, use the mapped name; otherwise convert using go2v_ident
+		v_name := if ident in app.name_mapping {
+			app.name_mapping[ident]
+		} else {
+			app.go2v_ident(ident)
+		}
 		if v_name in app.cur_fn_names && v_name !in captured {
 			captured << v_name
 		}
 	}
 
-	// Exclude closure parameters from captures
+	// Exclude closure parameters from captures and remove stale name_mappings
+	// for parameter names (closure params shadow any outer variable with same name)
 	for param in node.typ.params.list {
 		for name in param.names {
 			v_name := app.go2v_ident(name.name)
 			captured = captured.filter(it != v_name)
+			// Also filter out any mapped version of this name
+			if name.name in app.name_mapping {
+				mapped_name := app.name_mapping[name.name]
+				captured = captured.filter(it != mapped_name)
+			}
 		}
 	}
 
@@ -314,6 +325,13 @@ fn (mut app App) func_lit(node FuncLit) {
 	app.func_params(node.typ.params)
 	app.func_return_type(node.typ.results)
 	app.gen(' ') // Space before block
+	// Remove old name_mappings for parameter names before processing body
+	// The closure parameters shadow any outer variables with the same name
+	for param in node.typ.params.list {
+		for name in param.names {
+			app.name_mapping.delete(name.name)
+		}
+	}
 	app.block_stmt(node.body)
 }
 
@@ -467,7 +485,14 @@ fn (mut app App) collect_idents_from_expr(expr Expr, mut idents map[string]bool)
 			app.collect_idents_from_expr(expr.index, mut idents)
 		}
 		SelectorExpr {
-			app.collect_idents_from_expr(expr.x, mut idents)
+			// Don't collect the base of SelectorExpr - if it's a module/package name
+			// (like 'ast' in 'ast.ImportEntryPoint'), we don't want to capture it.
+			// If it's actually a variable being accessed (like 'obj.field'), the
+			// variable will be collected from other usages where it's not a selector base.
+			// Only recurse if the base is not a simple Ident (e.g., it's a nested expression)
+			if expr.x !is Ident {
+				app.collect_idents_from_expr(expr.x, mut idents)
+			}
 		}
 		SliceExpr {
 			app.collect_idents_from_expr(expr.x, mut idents)
@@ -493,11 +518,35 @@ fn (mut app App) collect_idents_from_expr(expr Expr, mut idents map[string]bool)
 			}
 		}
 		KeyValueExpr {
-			app.collect_idents_from_expr(expr.key, mut idents)
+			// Don't collect the key if it's a simple Ident - it's likely a struct field name
+			// rather than a variable reference. Map keys with variable names will be missed,
+			// but this is rare and avoids false positives from struct field names.
+			if expr.key !is Ident {
+				app.collect_idents_from_expr(expr.key, mut idents)
+			}
 			app.collect_idents_from_expr(expr.value, mut idents)
 		}
 		FuncLit {
-			// Don't recurse into nested closures - they'll capture their own variables
+			// Recurse into nested closures - if they use outer variables,
+			// this closure also needs to capture them to make them available.
+			// But we need to exclude the nested closure's own parameters.
+			mut nested_declared := map[string]bool{}
+			// Add nested closure's parameters as declared
+			for param in expr.typ.params.list {
+				for name in param.names {
+					nested_declared[name.name] = true
+				}
+			}
+			// Collect declarations from the nested closure body
+			app.collect_declarations_from_stmts(expr.body.list, mut nested_declared)
+			// Collect identifiers, but skip those declared in the nested closure
+			mut nested_idents := map[string]bool{}
+			app.collect_idents_from_stmts(expr.body.list, mut nested_idents)
+			for ident, _ in nested_idents {
+				if ident !in nested_declared {
+					idents[ident] = true
+				}
+			}
 		}
 		else {}
 	}

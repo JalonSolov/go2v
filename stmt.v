@@ -96,9 +96,15 @@ fn (mut app App) decl_stmt(d DeclStmt) {
 								if idx > 0 {
 									app.gen(',')
 								}
-								n := app.unique_name_anti_shadow(app.go2v_ident(spec.names[idx].name))
+								go_name := spec.names[idx].name
+								v_name := app.go2v_ident(go_name)
+								n := app.unique_name_anti_shadow(v_name)
 								app.gen(n)
 								app.cur_fn_names[n] = true
+								// Update name_mapping if the name was changed due to shadowing
+								if n != v_name {
+									app.name_mapping[go_name] = n
+								}
 							}
 							app.gen(' := ')
 
@@ -151,12 +157,16 @@ fn (mut app App) decl_stmt(d DeclStmt) {
 										continue
 									}
 								}
-								// Handle ArrayType (e.g., [4]byte)
+								// Handle ArrayType (e.g., [4]byte or []Type)
 								if spec.typ is ArrayType {
 									arr := spec.typ as ArrayType
 									app.gen('[')
-									app.expr(arr.len)
+									// Only generate length for fixed-size arrays, not slices
+									if arr.len !is InvalidExpr {
+										app.expr(arr.len)
+									}
 									app.gen(']')
+									app.force_upper = true
 									app.expr(arr.elt)
 									app.genln('{}')
 									continue

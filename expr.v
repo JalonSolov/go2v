@@ -296,7 +296,14 @@ fn (mut app App) ident(node Ident) {
 fn (mut app App) index_expr(s IndexExpr) {
 	app.expr(s.x)
 	app.gen('[')
-	app.expr(s.index)
+	// If the index is a struct literal, convert to string for V map compatibility
+	// V doesn't support struct types as map keys, so we use string keys
+	if s.index is CompositeLit {
+		app.expr(s.index)
+		app.gen('.str()')
+	} else {
+		app.expr(s.index)
+	}
 	app.gen(']')
 }
 
@@ -319,14 +326,15 @@ fn (mut app App) map_type(node MapType) {
 			if conversion.is_basic {
 				app.gen(conversion.v_type)
 			} else {
-				// Capitalize struct type names for map keys (V requirement)
-				app.gen(node.key.name.capitalize())
+				// V doesn't support struct types as map keys
+				// Convert to string - the key will need .str() calls at access sites
+				app.gen('string')
 			}
 		}
 		SelectorExpr {
 			// V doesn't support struct types as map keys (e.g., map[pkg.Type]V)
-			// Convert to voidptr for pointer-based comparison
-			app.gen('voidptr')
+			// Convert to string - the key will need .str() calls at access sites
+			app.gen('string')
 		}
 		StarExpr {
 			// Pointer type as map key, e.g., map[*Node]bool
