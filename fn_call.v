@@ -135,6 +135,7 @@ fn (mut app App) call_expr(call CallExpr) {
 	}
 
 	// []byte(str) => str.bytes()
+	// []rune(str) => str.runes
 	if fun is ArrayType {
 		elt := fun.elt
 		if elt is Ident && elt.name == 'byte' {
@@ -143,6 +144,12 @@ fn (mut app App) call_expr(call CallExpr) {
 			// if x is BasicLit {
 			app.expr(x)
 			app.gen('.bytes()')
+			return
+		}
+		if elt is Ident && elt.name == 'rune' {
+			x := call.args[0]
+			app.expr(x)
+			app.gen('.runes')
 			return
 		}
 	}
@@ -186,7 +193,9 @@ fn (mut app App) call_expr(call CallExpr) {
 					} else {
 						// For strings, strip quotes; for other literals (int, float, bool), use as-is
 						if arg.kind == 'STRING' {
-							app.gen(arg.value[1..arg.value.len - 1])
+							// Escape single quotes since we're building a single-quoted V string
+							content := arg.value[1..arg.value.len - 1].replace("'", r"\'")
+							app.gen(content)
 						} else {
 							app.gen(arg.value)
 						}

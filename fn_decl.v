@@ -144,8 +144,37 @@ fn (mut app App) func_type(t FuncType) {
 	if !app.in_interface_decl {
 		app.gen('fn ')
 	}
-	app.func_params(t.params)
+	app.func_params_for_type(t.params)
 	app.func_return_type(t.results)
+}
+
+fn (mut app App) func_params_for_type(params FieldList) {
+	// Function type parameters: unnamed params are just types, no _ needed
+	app.gen('(')
+	for i, param in params.list {
+		if param.names.len == 0 {
+			// In function types, unnamed params are just the type
+			app.typ(param.typ)
+		} else {
+			for j, name in param.names {
+				saved_force_upper := app.force_upper
+				app.force_upper = false
+				v_name := app.go2v_ident(name.name)
+				app.gen(v_name)
+				app.force_upper = saved_force_upper
+				app.gen(' ')
+				app.force_upper = true
+				app.typ(param.typ)
+				if j < param.names.len - 1 {
+					app.gen(',')
+				}
+			}
+		}
+		if i < params.list.len - 1 {
+			app.gen(',')
+		}
+	}
+	app.gen(')')
 }
 
 fn (mut app App) func_return_type(results FieldList) {
