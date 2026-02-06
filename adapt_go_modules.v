@@ -115,6 +115,7 @@ fn (mut app App) handle_strings_call(fn_name string, args []Expr) {
 		'last_index_any' {
 			// strings.LastIndexAny(s, chars) - V doesn't have this
 			// Generate a helper call from the string_helpers module
+			app.require_import('string_helpers')
 			app.gen('string_helpers.strings_last_index_any(')
 			app.expr(args[0])
 			app.gen(', ')
@@ -372,6 +373,7 @@ fn (mut app App) handle_sort_call(fn_name string, args []Expr) {
 fn (mut app App) handle_utf8_call(fn_name string, args []Expr) {
 	match fn_name {
 		'DecodeRuneInString' {
+			app.require_import('string_helpers')
 			app.gen('string_helpers.decode_rune_in_string(')
 			if args.len > 0 {
 				app.expr(args[0])
@@ -380,6 +382,7 @@ fn (mut app App) handle_utf8_call(fn_name string, args []Expr) {
 			app.skip_call_parens = true
 		}
 		'DecodeLastRuneInString' {
+			app.require_import('string_helpers')
 			app.gen('string_helpers.decode_last_rune_in_string(')
 			if args.len > 0 {
 				app.expr(args[0])

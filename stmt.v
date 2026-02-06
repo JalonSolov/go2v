@@ -192,11 +192,13 @@ fn (mut app App) decl_stmt(d DeclStmt) {
 										type_name := sel.sel.name
 										// strings.Builder => strings.new_builder(0)
 										if mod == 'strings' && type_name == 'Builder' {
+											app.require_import('strings')
 											app.genln('strings.new_builder(0)')
 											continue
 										}
 										// bytes.Buffer => strings.new_builder(0) (V uses strings.Builder for both)
 										if mod == 'bytes' && type_name == 'Buffer' {
+											app.require_import('strings')
 											app.genln('strings.new_builder(0)')
 											continue
 										}
@@ -511,6 +513,10 @@ fn (mut app App) labeled_stmt(l LabeledStmt) {
 }
 
 fn (mut app App) range_stmt(node RangeStmt) {
+	// Check if key or value variables are reassigned in the loop body
+	key_is_mut := node.key.name != '' && app.is_assigned_in_block(node.key.name, node.body)
+	value_is_mut := node.value.name != '' && app.is_assigned_in_block(node.value.name, node.body)
+
 	app.gen('for ')
 	// Both key and value are present
 	// if node.key.name != node.value.name {
@@ -524,6 +530,9 @@ fn (mut app App) range_stmt(node RangeStmt) {
 		if key_name != v_key {
 			app.name_mapping[node.key.name] = key_name
 		}
+		if key_is_mut {
+			app.gen('mut ')
+		}
 		app.gen(key_name)
 		app.gen(', ')
 		if node.value.name == '' {
@@ -536,6 +545,9 @@ fn (mut app App) range_stmt(node RangeStmt) {
 			if value_name != v_val {
 				app.name_mapping[node.value.name] = value_name
 			}
+			if value_is_mut {
+				app.gen('mut ')
+			}
 			app.gen(value_name)
 		}
 	}
@@ -543,6 +555,76 @@ fn (mut app App) range_stmt(node RangeStmt) {
 	app.expr(node.x)
 	app.gen(' ')
 	app.block_stmt(node.body)
+}
+
+// is_assigned_in_block checks if a variable name is assigned to within a block statement
+fn (app App) is_assigned_in_block(name string, block BlockStmt) bool {
+	for stmt in block.list {
+		if app.is_assigned_in_stmt(name, stmt) {
+			return true
+		}
+	}
+	return false
+}
+
+// is_assigned_in_stmt recursively checks if a variable is assigned in a statement
+fn (app App) is_assigned_in_stmt(name string, stmt Stmt) bool {
+	match stmt {
+		AssignStmt {
+			// Only check = assignments, not := declarations
+			// := creates a new variable, = modifies an existing one
+			if stmt.tok == '=' {
+				// Check if the variable is on the left side of an assignment
+				for lhs in stmt.lhs {
+					if lhs is Ident && lhs.name == name {
+						return true
+					}
+				}
+			}
+		}
+		BlockStmt {
+			return app.is_assigned_in_block(name, stmt)
+		}
+		IfStmt {
+			if app.is_assigned_in_block(name, stmt.body) {
+				return true
+			}
+			// Check else branch - recursively check the else_ statement
+			if app.is_assigned_in_stmt(name, stmt.else_) {
+				return true
+			}
+		}
+		ForStmt {
+			if app.is_assigned_in_block(name, stmt.body) {
+				return true
+			}
+		}
+		RangeStmt {
+			if app.is_assigned_in_block(name, stmt.body) {
+				return true
+			}
+		}
+		SwitchStmt {
+			if app.is_assigned_in_block(name, stmt.body) {
+				return true
+			}
+		}
+		TypeSwitchStmt {
+			if app.is_assigned_in_block(name, stmt.body) {
+				return true
+			}
+		}
+		CaseClause {
+			// Check statements inside the case clause body
+			for case_stmt in stmt.body {
+				if app.is_assigned_in_stmt(name, case_stmt) {
+					return true
+				}
+			}
+		}
+		else {}
+	}
+	return false
 }
 
 // Check if expression is a module-qualified composite literal (e.g., api.WatchOptions{})

@@ -48,6 +48,7 @@ mut:
 	current_call_rhs_idx    int               // current RHS index being processed in assignment
 	in_unsafe_block         bool              // true when generating inside unsafe {} block
 	imported_modules        map[string]bool   // track already imported modules to avoid duplicates
+	required_imports        map[string]bool   // imports required based on actual code usage (added at end)
 }
 
 fn (mut app App) genln(s string) {
@@ -56,6 +57,11 @@ fn (mut app App) genln(s string) {
 
 fn (mut app App) gen(s string) {
 	app.sb.write_string(s)
+}
+
+// require_import marks a module as required based on actual code usage
+fn (mut app App) require_import(mod string) {
+	app.required_imports[mod] = true
 }
 
 fn (mut app App) generate_v_code(go_file GoFile) string {
@@ -80,7 +86,25 @@ fn (mut app App) generate_v_code(go_file GoFile) string {
 		app.gen(struct_def)
 	}
 
-	return app.sb.str()
+	mut result := app.sb.str()
+
+	// Insert required imports that were discovered during code generation
+	if app.required_imports.len > 0 {
+		mut imports_str := ''
+		for imp, _ in app.required_imports {
+			if imp !in app.imported_modules {
+				imports_str += 'import ${imp}\n'
+			}
+		}
+		if imports_str.len > 0 {
+			// Find the end of the module line and insert imports there
+			if idx := result.index('\n\n') {
+				result = result[..idx + 1] + imports_str + result[idx + 1..]
+			}
+		}
+	}
+
+	return result
 }
 
 // scan_for_enum_types pre-scans declarations to identify types that will become enums

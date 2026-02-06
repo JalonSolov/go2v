@@ -230,6 +230,8 @@ fn (mut app App) func_params_with_mutability(params FieldList, mut_params map[st
 				// But only add mut for reference types - V doesn't allow mut for basic types
 				if name.name in mut_params {
 					// Only add mut for types that V allows: pointers, arrays, maps, structs, interfaces
+					// Note: We don't include SelectorExpr (module-qualified types) because adding mut
+					// changes the function signature, breaking callback compatibility
 					is_ref_type := param.typ is StarExpr || param.typ is ArrayType
 						|| param.typ is MapType || param.typ is StructType
 						|| param.typ is InterfaceType

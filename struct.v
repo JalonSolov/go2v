@@ -555,11 +555,13 @@ fn (mut app App) composite_lit(c CompositeLit) {
 				type_name := sel.sel.name
 				// strings.Builder{} -> strings.new_builder(0)
 				if mod_name == 'strings' && type_name == 'Builder' {
+					app.require_import('strings')
 					app.gen('strings.new_builder(0)')
 					return
 				}
 				// bytes.Buffer{} -> strings.new_builder(0) (V uses strings.Builder for both)
 				if mod_name == 'bytes' && type_name == 'Buffer' {
+					app.require_import('strings')
 					app.gen('strings.new_builder(0)')
 					return
 				}
